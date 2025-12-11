@@ -107,6 +107,33 @@ const AIService = {
     },
 
     /**
+     * Set the AI model to use
+     * @param {string} modelName 
+     */
+    setModel(modelName) {
+        if (modelName) {
+            this.model = modelName;
+            console.log(`AIService: Model set to ${modelName}`);
+        }
+    },
+
+    /**
+     * Get list of available models from Ollama
+     * @returns {Promise<string[]>} List of model names
+     */
+    async getModels() {
+        try {
+            const res = await fetch('http://localhost:11434/api/tags');
+            if (!res.ok) throw new Error('Failed to fetch models');
+            const data = await res.json();
+            return data.models.map(m => m.name);
+        } catch (e) {
+            console.warn('Could not fetch models:', e);
+            return [];
+        }
+    },
+
+    /**
      * Internal helper to call Ollama
      */
     async queryOllama(prompt) {

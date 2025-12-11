@@ -573,6 +573,71 @@ function updateSyncStatus(msg = 'Note saved', isError = false) {
     }, 2000);
 }
 
+// --- Settings & Configuration ---
+
+const settingsModal = document.getElementById('settings-modal');
+const settingsModelSelect = document.getElementById('settings-model');
+
+async function openSettings() {
+    settingsModal.classList.remove('hidden');
+
+    // Load Models
+    settingsModelSelect.innerHTML = '<option disabled>Loading...</option>';
+    const models = await AIService.getModels();
+
+    settingsModelSelect.innerHTML = '';
+    if (models.length === 0) {
+        const option = document.createElement('option');
+        option.text = "Error fetching models (Ollama offline?)";
+        option.disabled = true;
+        settingsModelSelect.add(option);
+
+        // Add fallback
+        const fallback = document.createElement('option');
+        fallback.text = "llama2:7b";
+        fallback.value = "llama2:7b";
+        settingsModelSelect.add(fallback);
+    } else {
+        models.forEach(m => {
+            const option = document.createElement('option');
+            option.value = m;
+            option.text = m;
+            settingsModelSelect.add(option);
+        });
+    }
+
+    // Set current selection
+    settingsModelSelect.value = AIService.model;
+}
+
+function closeSettings() {
+    settingsModal.classList.add('hidden');
+}
+
+async function saveSettings() {
+    const selectedModel = settingsModelSelect.value;
+    if (selectedModel) {
+        AIService.setModel(selectedModel);
+
+        // Persist to DB
+        try {
+            await db.settings.put({ key: 'ai_model', value: selectedModel });
+            updateSyncStatus('Settings Saved');
+        } catch (e) {
+            console.error('Failed to save settings:', e);
+            updateSyncStatus('Error saving settings', true);
+        }
+
+        closeSettings();
+    }
+}
+
+// Close on click outside
+settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) closeSettings();
+});
+
+
 // --- Cleanup (User Request) ---
 (async function removeGroupIdeaNote() {
     try {
@@ -600,4 +665,11 @@ window.addEventListener('db-ready', () => {
     refreshNotes().then(() => {
         if (notes.length > 0) setActiveNote(notes[0].id);
     });
+
+    // Load Settings
+    db.settings.get('ai_model').then(record => {
+        if (record && record.value) {
+            AIService.setModel(record.value);
+        }
+    }).catch(console.warn);
 });

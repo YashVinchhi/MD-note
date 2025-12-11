@@ -35,7 +35,7 @@ def main():
         print(f"║   SmartNotes Development Server               ║")
         print(f"╠═══════════════════════════════════════════════╣")
         print(f"║   Server running at:                          ║")
-        print(f"║   → http://localhost:{PORT}                    ║")
+        print(f"║   → http://localhost:{PORT}                   ║")
         print(f"║                                               ║")
         print(f"║   Press Ctrl+C to stop the server             ║")
         print(f"╚═══════════════════════════════════════════════╝")
