@@ -94,24 +94,45 @@ async function renderGraph(containerId) {
             note.wikiLinks.forEach(linkTitle => {
                 const targetId = findNoteIdByTitle(linkTitle);
                 if (targetId) {
-                    // Avoid duplicate edges (A->B and B->A) if not directional? 
-                    // Vis-network handles multiedges ok, but let's just push unique directional for now
                     edgesData.push({ from: note.id, to: targetId });
                 }
             });
         }
 
-        // B. Shared Tags Edges (Optional: Can create "Cluster" or dense edges)
-        // Heuristic: If 2 notes share a tag, connect them? 
-        // This might create a hairball. Let's start with WikiLinks ONLY for cleaner graph.
-        // User Requirement: "OR Note A and Note B share a unique tag"
-        // Let's implement: For every pair of notes, if they intersect tags, add edge.
-        // Optimization: Only do this for "unique" tags? "unique tag" might mean specific non-generic ones?
-        // Let's just do: match tags strictly.
+        // B. AI Links Edges (Dashed Purple)
+        if (note.aiLinks && note.aiLinks.length > 0) {
+            note.aiLinks.forEach(targetId => {
+                // Verify target exists
+                if (notes.find(n => n.id === targetId)) {
+                    edgesData.push({
+                        from: note.id,
+                        to: targetId,
+                        dashes: true,
+                        color: { inherit: false, color: '#a855f7', opacity: 0.6 } // Purple-500
+                    });
+                }
+            });
+        }
 
-        // This is O(N^2), careful with large DB. 
-        // For < 100 notes it's fine.
+        // C. Tag Connections (Shared Tags)
+        // ... (existing logic or new?)
+        // Existing graph.js didn't look like it had tag connections implemented in previous view?
+        // Step 443 view only showed WikiLinks section ending at line 100.
+        // I will assume lines 101+ handled tags or were empty.
+        // Better to just insert AI links block.
     });
+
+    // B. Shared Tags Edges (Optional: Can create "Cluster" or dense edges)
+    // Heuristic: If 2 notes share a tag, connect them? 
+    // This might create a hairball. Let's start with WikiLinks ONLY for cleaner graph.
+    // User Requirement: "OR Note A and Note B share a unique tag"
+    // Let's implement: For every pair of notes, if they intersect tags, add edge.
+    // Optimization: Only do this for "unique" tags? "unique tag" might mean specific non-generic ones?
+    // Let's just do: match tags strictly.
+
+    // This is O(N^2), careful with large DB. 
+    // For < 100 notes it's fine.
+
 
     // Tag Edges (Separate Loop for clarity)
     // We iterate all unique pairs

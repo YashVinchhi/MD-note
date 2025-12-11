@@ -298,6 +298,19 @@ main {
 
     #note-preview {
         display: block !important;
+        overflow: visible !important;
+    }
+
+    /* Mermaid Print Overrides */
+    .mermaid {
+        break-inside: avoid;
+        page-break-inside: avoid;
+        background: white !important;
+        margin: 20px 0 !important;
+    }
+
+    .mermaid svg {
+        max-width: 100% !important;
     }
 
     .prose h1 {

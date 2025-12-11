@@ -409,9 +409,17 @@ function renderMarkdownPreview() {
 
     // 3. Render Mermaid
     if (window.mermaid) {
-        mermaid.run({
-            nodes: preview.querySelectorAll('.mermaid')
-        });
+        try {
+            // run() is async
+            mermaid.run({
+                nodes: preview.querySelectorAll('.mermaid')
+            }).catch(err => {
+                console.error('Mermaid Run Warning:', err);
+            });
+        } catch (e) {
+            console.error('Mermaid Initialization Error:', e);
+            preview.innerHTML += `<div class="p-4 text-red-500 bg-red-100 rounded">Mermaid Error: ${e.message}</div>`;
+        }
     }
 }
 
@@ -495,6 +503,45 @@ async function triggerSummarize() {
             alert("Summary Generated:\n\n" + summary);
         } else {
             updateSyncStatus('No summary generated', true);
+        }
+    } catch (e) {
+        console.error(e);
+        updateSyncStatus('AI Offline', true);
+    } finally {
+        if (btn) btn.classList.remove('animate-spin');
+    }
+}
+
+async function triggerAIConnect() {
+    if (!activeNoteId) return;
+
+    const btn = document.getElementById('ai-connect-btn');
+    if (btn) btn.classList.add('animate-spin');
+
+    const note = notes.find(n => n.id === activeNoteId);
+    if (!note || !note.body) {
+        if (btn) btn.classList.remove('animate-spin');
+        return;
+    }
+
+    try {
+        // Exclude current note from context
+        const otherNotes = notes.filter(n => n.id !== activeNoteId);
+
+        const relatedIds = await AIService.findRelatedNotes(note.body, otherNotes);
+
+        if (relatedIds && relatedIds.length > 0) {
+            note.aiLinks = relatedIds;
+
+            await saveCurrentNote();
+            updateSyncStatus(`Linked to ${relatedIds.length} notes!`);
+
+            // Refresh graph immediately
+            if (document.getElementById('graph-container') && !document.getElementById('graph-container').classList.contains('hidden')) {
+                if (window.renderGraph) renderGraph('graph-container');
+            }
+        } else {
+            updateSyncStatus('No relations found', true);
         }
     } catch (e) {
         console.error(e);

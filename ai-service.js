@@ -67,6 +67,46 @@ const AIService = {
     },
 
     /**
+     * Find semantically related notes
+     * @param {string} content - Current note content
+     * @param {Array} notesList - List of {id, title, tags}
+     * @returns {Promise<string[]>} List of related Note IDs
+     */
+    async findRelatedNotes(content, notesList) {
+        if (!content || !notesList || notesList.length === 0) return [];
+
+        // Prepare context (limit to avoid token overflow)
+        // We take Title + Tags.
+        const context = notesList.slice(0, 50).map(n =>
+            `ID: ${n.id} | Title: ${n.title} | Tags: ${n.tags.join(', ')}`
+        ).join('\n');
+
+        const prompt = `Task: Identify up to 3 existing notes that are strongly related to the new note below.
+        
+        New Note Content:
+        "${content.substring(0, 500)}..."
+        
+        Existing Notes:
+        ${context}
+        
+        Return ONLY a JSON array of the related Note IDs. No text.
+        Example: ["123", "456"]`;
+
+        try {
+            const result = await this.queryOllama(prompt);
+            // Attempt to parse JSON
+            const jsonMatch = result.match(/\[.*\]/s);
+            if (jsonMatch) {
+                return JSON.parse(jsonMatch[0]);
+            }
+            return [];
+        } catch (e) {
+            console.error('AI Linking failed:', e);
+            return [];
+        }
+    },
+
+    /**
      * Internal helper to call Ollama
      */
     async queryOllama(prompt) {
