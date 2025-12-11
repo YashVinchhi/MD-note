@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>Mermaid Test</title>
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+</head>
+
+<body>
+    <h1>Mermaid Test</h1>
+    <div id="preview"></div>
+
+    <script>
+        const content = "```mermaid\ngraph TD;\nA-->B;\n```";
+
+        // Configure Marked
+        const renderer = new marked.Renderer();
+        const originalCode = renderer.code.bind(renderer);
+
+        renderer.code = (code, language, isEscaped) => {
+            console.log('Renderer called for lang:', language); // Debug
+            if (language === 'mermaid') {
+                return `<div class="mermaid">${code}</div>`;
+            }
+            return originalCode(code, language, isEscaped);
+        };
+
+        marked.use({ renderer: renderer });
+
+        // Init Mermaid
+        mermaid.initialize({ startOnLoad: false });
+
+        // Render
+        const preview = document.getElementById('preview');
+        preview.innerHTML = marked.parse(content);
+
+        // Run Mermaid
+        mermaid.run({
+            nodes: preview.querySelectorAll('.mermaid')
+        });
+    </script>
+</body>
+
+</html>

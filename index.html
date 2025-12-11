@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+    <title>SmartNotes - Synapse</title>
+
+    <!-- CSS -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography,container-queries"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
+        rel="stylesheet" />
+    <link href="styles.css" rel="stylesheet" />
+
+    <!-- Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.css" rel="stylesheet" />
+</head>
+
+<body
+    class="h-screen w-screen overflow-hidden selection:bg-indigo-500/30 selection:text-indigo-600 dark:selection:text-indigo-300 transition-colors duration-300">
+
+    <div class="relative z-10 flex h-full w-full">
+
+        <!-- Navigation Pane -->
+        <nav class="distraction-free-nav active" id="navigation-pane">
+            <div
+                class="flex flex-col justify-between h-full border-r border-gray-200 dark:border-gray-800 bg-[var(--nav-bg-light)] dark:bg-[var(--nav-bg-dark)]">
+                <div class="flex flex-col gap-2 p-4">
+                    <div
+                        class="flex items-center gap-3 p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer transition-colors mb-4">
+                        <div
+                            class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center text-white text-xs font-bold shadow-lg">
+                            YD</div>
+                        <div class="overflow-hidden">
+                            <p class="text-sm font-semibold truncate">Yash's Workspace</p>
+                        </div>
+                    </div>
+                    <div class="space-y-1">
+                        <button onclick="renderNoteList('all')"
+                            class="w-full flex items-center gap-3 px-3 py-2 text-gray-700 dark:text-gray-300 bg-black/5 dark:bg-white/10 rounded-lg font-medium transition-all text-left">
+                            <span class="material-symbols-outlined text-[20px]">home</span>
+                            <span class="text-sm">All Notes</span>
+                            <span id="total-count" class="ml-auto text-xs font-bold text-gray-400">0</span>
+                        </button>
+                        <button onclick="renderNoteList('pinned')"
+                            class="w-full flex items-center gap-3 px-3 py-2 text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg font-medium transition-all text-left">
+                            <span class="material-symbols-outlined text-[20px]">star</span>
+                            <span class="text-sm">Favorites</span>
+                        </button>
+                        <button id="graph-view-btn" onclick="toggleGraphView()"
+                            class="w-full flex items-center gap-3 px-3 py-2 text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg font-medium transition-all text-left">
+                            <span class="material-symbols-outlined text-[20px]">hub</span>
+                            <span class="text-sm">Graph View</span>
+                        </button>
+                    </div>
+                </div>
+
+                <div class="p-4 border-t border-gray-200 dark:border-gray-800">
+                    <button
+                        class="w-full flex items-center gap-3 px-3 py-2 text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg font-medium transition-all"
+                        onclick="document.documentElement.classList.toggle('dark')">
+                        <span class="material-symbols-outlined dark:hidden">dark_mode</span>
+                        <span class="material-symbols-outlined hidden dark:block">light_mode</span>
+                        <span class="text-sm">Toggle Theme</span>
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        <!-- List Pane -->
+        <aside class="distraction-free-list active" id="note-list-pane">
+            <div
+                class="flex flex-col h-full border-r border-gray-200 dark:border-gray-800 bg-[var(--list-bg-light)] dark:bg-[var(--list-bg-dark)]">
+                <div class="p-4 border-b border-gray-200 dark:border-gray-800/50">
+                    <div class="flex items-center justify-between mb-4">
+                        <h2 class="text-xl font-bold tracking-tight">All Notes</h2>
+                        <button onclick="createNewNote()"
+                            class="p-1.5 text-blue-600 hover:bg-blue-100 dark:text-blue-400 dark:hover:bg-blue-900/30 rounded-lg transition-colors"
+                            title="Add Note">
+                            <span class="material-symbols-outlined text-[24px]">add_circle</span>
+                        </button>
+                    </div>
+                    <div class="relative group">
+                        <span
+                            class="absolute left-3 top-2.5 text-gray-400 material-symbols-outlined text-[20px]">search</span>
+                        <input id="search-input"
+                            class="w-full bg-gray-100 dark:bg-gray-800 border-none rounded-xl py-2.5 pl-10 pr-12 text-sm focus:ring-2 focus:ring-blue-500/50 transition-all placeholder-gray-500 dark:text-white"
+                            placeholder="Search..." type="text" />
+                    </div>
+                </div>
+                <!-- List / Graph Switcher Wrapper -->
+                <div class="flex-1 relative overflow-hidden">
+                    <!-- List View -->
+                    <div id="notes-list-wrapper" class="absolute inset-0 flex flex-col">
+                        <div id="notes-container" class="flex-1 overflow-y-auto p-3 space-y-2">
+                        </div>
+                    </div>
+
+                    <!-- Graph View -->
+                    <div id="graph-container" class="hidden absolute inset-0 bg-gray-50 dark:bg-gray-900">
+                        <!-- Vis Network -->
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Editor Pane -->
+        <main
+            class="flex-1 flex flex-col h-full relative overflow-hidden bg-[var(--editor-bg-light)] dark:bg-[var(--editor-bg-dark)]">
+
+            <!-- Tab Bar -->
+            <div id="tab-bar"
+                class="flex items-center overflow-x-auto bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 scrollbar-hide">
+                <!-- Tabs rendered here -->
+            </div>
+
+            <header
+                class="h-16 flex items-center justify-between px-6 border-b border-gray-100 dark:border-gray-800 z-20">
+                <div
+                    class="flex items-center gap-2 text-sm text-[var(--editor-accent-light)] dark:text-[var(--editor-accent-dark)]">
+                    <button onclick="togglePane('nav')"
+                        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                        title="Toggle Navigation">
+                        <span class="material-symbols-outlined text-[20px]">menu</span>
+                    </button>
+                    <button onclick="togglePane('list')"
+                        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+                        title="Toggle List">
+                        <span class="material-symbols-outlined text-[20px]">notes</span>
+                    </button>
+                    <span class="material-symbols-outlined text-[16px] mx-1 text-gray-300">chevron_right</span>
+                    <span id="header-title" class="font-medium truncate max-w-[200px]">Select a note</span>
+                    <div id="sync-status"
+                        class="ml-4 flex items-center gap-1 text-xs text-green-500 bg-green-50 dark:bg-green-900/20 px-2 py-0.5 rounded-full opacity-0 transition-opacity">
+                        <span class="material-symbols-outlined text-[14px]">cloud_done</span>
+                        <span>Synced</span>
+                    </div>
+                </div>
+                <div class="flex items-center gap-2">
+                    <button onclick="togglePreviewMode()"
+                        class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors">
+                        <span class="material-symbols-outlined text-[18px]">visibility</span>
+                        <span id="preview-btn-text">Preview</span>
+                    </button>
+                    <!-- Export Tools -->
+                    <button onclick="exportNote()"
+                        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 transition-colors"
+                        title="Export TXT">
+                        <span class="material-symbols-outlined text-[20px]">download</span>
+                    </button>
+                    <button onclick="printNote()"
+                        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 transition-colors"
+                        title="Print / PDF">
+                        <span class="material-symbols-outlined text-[20px]">print</span>
+                    </button>
+                    <div class="h-4 w-px bg-gray-300 dark:bg-gray-700 mx-1"></div>
+                    <button onclick="togglePin()" id="pin-btn"
+                        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-400 transition-colors">
+                        <span class="material-symbols-outlined text-[20px]">push_pin</span>
+                    </button>
+                    <button onclick="deleteCurrentNote()"
+                        class="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-900/20 transition-colors text-gray-400"
+                        title="Delete">
+                        <span class="material-symbols-outlined text-[20px]">delete</span>
+                    </button>
+                </div>
+            </header>
+
+            <div class="flex-1 overflow-y-auto custom-scrollbar relative" id="editor-scroller">
+                <div class="max-w-3xl mx-auto px-8 py-12">
+
+                    <textarea id="note-title"
+                        class="w-full bg-transparent border-none p-0 text-4xl font-bold text-[var(--editor-text-light)] dark:text-[var(--editor-text-dark)] placeholder-gray-300 dark:placeholder-gray-700 focus:ring-0 mb-6 leading-tight resize-none overflow-hidden"
+                        rows="1" placeholder="Untitled Note"></textarea>
+
+                    <div class="flex items-center flex-wrap gap-4 mb-8 text-sm">
+                        <div
+                            class="flex items-center gap-2 text-[var(--editor-accent-light)] dark:text-[var(--editor-accent-dark)]">
+                            <span class="material-symbols-outlined text-[18px]">calendar_today</span>
+                            <span id="note-date">--</span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="material-symbols-outlined text-[18px] text-gray-400">label</span>
+                            <div id="tags-container" class="flex gap-2 flex-wrap">
+                            </div>
+                            <input id="tag-input"
+                                class="bg-transparent border-none p-0 text-[var(--editor-accent-light)] dark:text-[var(--editor-accent-dark)] focus:ring-0 text-xs w-20 hover:text-gray-600 focus:text-gray-800 dark:focus:text-gray-200 transition-colors"
+                                placeholder="+ Add tag" type="text" />
+                            <button onclick="triggerAutoTag()" id="ai-tag-btn"
+                                class="ml-2 p-1 rounded-md text-purple-500 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors"
+                                title="AI Auto-Tag">
+                                <span class="material-symbols-outlined text-[18px]">auto_awesome</span>
+                            </button>
+                            <button onclick="triggerSummarize()" id="ai-summary-btn"
+                                class="ml-1 p-1 rounded-md text-blue-500 hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors"
+                                title="AI Summarize">
+                                <span class="material-symbols-outlined text-[18px]">summarize</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <textarea id="note-body"
+                        class="w-full h-[calc(100vh-300px)] bg-transparent border-none p-0 text-lg leading-relaxed text-[var(--editor-text-light)] dark:text-[var(--editor-text-dark)] placeholder-gray-300 dark:placeholder-gray-700 focus:ring-0 resize-none font-mono"
+                        placeholder="Start writing... (Markdown supported)"></textarea>
+
+                    <div id="note-preview" class="hidden prose prose-lg dark:prose-invert max-w-none preview-mode">
+                    </div>
+
+                    <div class="h-20"></div>
+                </div>
+            </div>
+
+            <div id="toast"
+                class="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-50 transition-all duration-300 opacity-0 translate-y-10 pointer-events-none">
+                <div
+                    class="flex items-center gap-3 bg-gray-900 dark:bg-white text-white dark:text-gray-900 px-4 py-3 rounded-lg shadow-2xl">
+                    <span
+                        class="material-symbols-outlined text-green-400 dark:text-green-600 text-[20px]">check_circle</span>
+                    <span id="toast-message" class="text-sm font-medium">Note saved</span>
+                </div>
+            </div>
+        </main>
+
+        <div class="omnibar" id="omnibar">
+            <div class="relative">
+                <span class="absolute left-3 top-3.5 text-gray-400 material-symbols-outlined text-[20px]">add</span>
+                <input id="omnibar-input"
+                    class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl py-3 pl-10 pr-4 text-base focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 shadow-2xl transition-all placeholder-gray-500 dark:text-white"
+                    placeholder="Type title and press Enter to create..." type="text" />
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Application Logic -->
+    <script src="db.js"></script>
+    <script src="graph.js"></script>
+    <script src="tabs.js"></script>
+    <script src="ai-service.js"></script>
+    <script src="app.js"></script>
+</body>
+
+</html>
