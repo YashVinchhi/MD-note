@@ -84,3 +84,4 @@ const VectorStore = {
         return dotProduct / (magnitudeA * magnitudeB);
     }
 };
+window.VectorStore = VectorStore;

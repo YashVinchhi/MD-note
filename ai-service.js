@@ -3,9 +3,10 @@
  * Connects to local Ollama instance for intelligence features
  */
 
-const AIService = {
-    endpoint: 'http://localhost:11434/api/generate',
+const AIService = { // Fallback if modules used
+    endpoint: '/api/generate',
     model: 'llama2:7b',
+
 
     /**
      * Check if Ollama is available
@@ -107,6 +108,24 @@ const AIService = {
     },
 
     /**
+     * Initialize Service
+     */
+    async init() {
+        try {
+            const res = await fetch('/api/default-model');
+            if (res.ok) {
+                const data = await res.json();
+                if (data.model) {
+                    this.model = data.model;
+                    console.log(`AIService: Initialized with server model: ${this.model}`);
+                }
+            }
+        } catch (e) {
+            console.warn('Failed to fetch default model from server:', e);
+        }
+    },
+
+    /**
      * Set the AI model to use
      * @param {string} modelName 
      */
@@ -193,7 +212,7 @@ const AIService = {
 
             if (!response.ok) throw new Error('Chat failed');
             const data = await response.json();
-            return data.message; // { role: 'assistant', content: '...' }
+            return data.message.content; // Return just the text content
         } catch (e) {
             console.error("Chat Error:", e);
             throw e;
@@ -232,3 +251,6 @@ const AIService = {
         }
     }
 };
+window.AIService = AIService;
+// Initialize
+setTimeout(() => AIService.init(), 1000); // Small delay to ensure server is ready? No, server is always ready. Just nice to detach.

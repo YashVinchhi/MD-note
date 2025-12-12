@@ -21,13 +21,22 @@ SERVER_THREAD = None
 HTTPD = None
 IS_RUNNING = False
 LOG_FILE = "server.log"
+SELECTED_MODEL = "llama2:7b" # Default model
 
 # Setup Logging
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
 
+import urllib.request
+import urllib.error
+import json
+
+# ... (Logging setup remains)
+
 class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
-    """HTTP Request Handler with CORS headers and File Logging"""
+    """HTTP Request Handler with CORS, Logging, and Ollama Proxy"""
     
+    OLLAMA_HOST = "http://localhost:11434"
+
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
         self.send_header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
@@ -40,7 +49,7 @@ class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
     
     def log_message(self, format, *args):
-        # Log to file instead of stderr to keep TUI clean
+        # Log to file instead of stderr
         msg = "%s - - [%s] %s" % (
             self.client_address[0],
             self.log_date_time_string(),
@@ -48,9 +57,96 @@ class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
         )
         logging.info(msg)
 
+    def proxy_ollama(self, method):
+        """Forward request to Ollama"""
+        target_url = f"{self.OLLAMA_HOST}{self.path}"
+        
+        try:
+            # Read body if POST
+            data = None
+            if method == 'POST':
+                content_length = int(self.headers.get('Content-Length', 0))
+                data = self.rfile.read(content_length)
+
+            # Create Request
+            req = urllib.request.Request(target_url, data=data, method=method)
+            req.add_header('Content-Type', 'application/json')
+
+            # Forward Request
+            with urllib.request.urlopen(req) as response:
+                self.send_response(response.status)
+                self.send_header('Content-Type', 'application/json')
+                self.end_headers()
+                self.wfile.write(response.read())
+                
+        except urllib.error.URLError as e:
+            self.send_response(502)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": f"Ollama Unreachable: {e}"}).encode())
+        except Exception as e:
+            self.send_response(500)
+            self.end_headers()
+            self.wfile.write(json.dumps({"error": str(e)}).encode())
+
+    def do_GET(self):
+        if self.path == '/api/default-model':
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({"model": SELECTED_MODEL}).encode())
+        elif self.path.startswith('/api/'):
+            self.proxy_ollama('GET')
+        else:
+            super().do_GET()
+
+    def do_POST(self):
+        if self.path.startswith('/api/'):
+            self.proxy_ollama('POST')
+        else:
+            self.send_error(404, "Endpoint not found")
+
+
 class ThreadedHTTPServer(socketserver.ThreadingTCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+def get_ollama_models():
+    """Fetch models from Ollama API"""
+    try:
+        url = "http://localhost:11434/api/tags"
+        req = urllib.request.Request(url)
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read())
+            return [m['name'] for m in data.get('models', [])]
+    except Exception as e:
+        print(f"Error fetching models: {e}")
+        return []
+
+def select_model_menu():
+    global SELECTED_MODEL
+    print("\\nfetching models...", end="", flush=True)
+    models = get_ollama_models()
+    if not models:
+        print(" Failed. Is Ollama running?")
+        return
+
+    print(" Done.\\n")
+    print("Available Models:")
+    for i, model in enumerate(models):
+        prefix = "-> " if model == SELECTED_MODEL else "   "
+        print(f"{prefix}{i+1}. {model}")
+
+    try:
+        choice = input(f"\\nSelect Model (1-{len(models)}): ")
+        idx = int(choice) - 1
+        if 0 <= idx < len(models):
+            SELECTED_MODEL = models[idx]
+            print(f"✓ Selected Model: {SELECTED_MODEL}")
+            logging.info(f"Model changed to {SELECTED_MODEL}")
+        else:
+            print("Invalid selection.")
+    except ValueError:
+        print("Invalid input.")
 
 def start_server():
     global HTTPD, IS_RUNNING, SERVER_THREAD
@@ -103,8 +199,9 @@ def print_menu():
     print(f"\n╔══════════════════════════════════════╗")
     print(f"║      SmartNotes Server Manager       ║")
     print(f"╠══════════════════════════════════════╣")
-    print(f"║  Status: {status:<27} ║")
+    print(f"║  Status: {status:<26} ║")
     print(f"║  Port:   {PORT:<27} ║")
+    print(f"║  Model:  {SELECTED_MODEL:<27} ║")
     print(f"╠══════════════════════════════════════╣")
     print(f"║  1. Start Server                     ║")
     print(f"║  2. Stop Server                      ║")
@@ -113,6 +210,7 @@ def print_menu():
     print(f"║  5. Open Browser                     ║")
     print(f"║  6. Clear Screen                     ║")
     print(f"║  7. Exit                             ║")
+    print(f"║  8. Select AI Model                  ║")
     print(f"╚══════════════════════════════════════╝")
 
 def main():
@@ -147,6 +245,8 @@ def main():
                     stop_server()
                 print("Goodbye!")
                 sys.exit(0)
+            elif choice == '8':
+                select_model_menu()
             else:
                 print("Invalid option. Please try again.")
                 time.sleep(1)

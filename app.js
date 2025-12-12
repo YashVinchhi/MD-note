@@ -8,9 +8,7 @@ let notes = []; // Local cache of notes for rendering
 let activeNoteId = null;
 let isPreviewMode = false;
 
-const script = document.createElement('script');
-script.src = 'vector-store.js';
-document.head.appendChild(script);
+
 
 // --- Core Functions ---
 
@@ -1148,6 +1146,23 @@ function openSettings() {
             </div>
             <div class="p-6 space-y-6">
                 
+                <!-- AI Model Selection -->
+                <div>
+                     <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">AI Model</h4>
+                     <div class="flex items-center gap-3">
+                        <div class="relative flex-1">
+                            <select id="model-select" class="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl px-4 py-3 text-sm appearance-none cursor-pointer focus:ring-2 focus:ring-blue-500">
+                                <option value="" disabled selected>Loading models...</option>
+                            </select>
+                            <span class="absolute right-4 top-3.5 pointer-events-none text-gray-500 material-symbols-outlined text-[20px]">expand_more</span>
+                        </div>
+                        <button onclick="saveSettings()" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl text-sm font-medium transition-colors">
+                            Save
+                        </button>
+                     </div>
+                     <p class="text-xs text-gray-400 mt-2">Selected model will be used for Chat, Tagging, and Summarization.</p>
+                </div>
+
                 <!-- Data Management -->
                 <div>
                     <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Data Management</h4>
@@ -1173,7 +1188,7 @@ function openSettings() {
                  <div>
                     <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">About</h4>
                     <p class="text-sm text-gray-600 dark:text-gray-400">
-                        SmartNotes Local v1.0<br>
+                        SmartNotes Local v1.1<br>
                         Data is stored locally in your browser (IndexedDB).
                     </p>
                 </div>
@@ -1182,6 +1197,49 @@ function openSettings() {
         </div>
     `;
     document.body.appendChild(modal);
+
+    // Populate Models
+    const select = document.getElementById('model-select');
+    if (window.AIService) {
+        AIService.getModels().then(models => {
+            select.innerHTML = '';
+            if (models.length === 0) {
+                const option = document.createElement('option');
+                option.text = "No models found (Is Ollama running?)";
+                select.add(option);
+                return;
+            }
+            models.forEach(m => {
+                const option = document.createElement('option');
+                option.value = m;
+                option.text = m;
+                if (m === AIService.model) option.selected = true;
+                select.add(option);
+            });
+        }).catch(err => {
+            select.innerHTML = '<option>Error loading models</option>';
+        });
+    }
+}
+
+function saveSettings() {
+    const select = document.getElementById('model-select');
+    const model = select.value;
+    if (model) {
+        AIService.setModel(model);
+        // Persist to localStorage?
+        localStorage.setItem('preferred-model', model);
+
+        // Visual feedback
+        const btn = document.querySelector('button[onclick="saveSettings()"]');
+        const originalText = btn.textContent;
+        btn.textContent = "Saved!";
+        btn.classList.add('bg-green-600');
+        setTimeout(() => {
+            btn.textContent = originalText;
+            btn.classList.remove('bg-green-600');
+        }, 1500);
+    }
 }
 
 
@@ -1226,103 +1284,257 @@ function toggleCheckboxInSource(index, isChecked) {
 
 // --- Chat Interface Logic ---
 
-function toggleChatPane() {
-    const pane = document.getElementById('chat-pane');
-    const editorPane = document.getElementById('editor-pane');
+const ChatManager = {
+    history: [], // [{role, content}]
+    mentionQuery: null, // Current mention search string
+    isMentioning: false,
+    mentionedNotes: new Set(), // IDs of notes explicitly mentioned in current draft
 
-    // Simple toggle for now (hides editor on mobile, maybe splitscreen on desktop)
-    const isHidden = pane.classList.contains('hidden');
+    togglePane() {
+        const pane = document.getElementById('chat-pane');
+        pane.classList.toggle('hidden');
+        if (!pane.classList.contains('hidden')) {
+            setTimeout(() => document.getElementById('chat-input').focus(), 100);
+        }
+    },
 
-    if (isHidden) {
-        pane.classList.remove('hidden');
-        // On mobile we might want to hide others, but flex layout handles desktop
-        // Let's force it to overlay or replace editor? 
-        // Index.html structure: Note List | Editor | Chat
-        // We injected Chat AFTER Editor. So flex row will show all 3 if space permits.
-        // We added chat-pane inside the rightmost flex area? 
-        // Need to check HTML structure carefully. 
-        // We added it as a sibling to navigation/list/editor wrapper? No, inside the flex-1 container?
-        // Let's assume standard behavior: visible next to editor or overlay
-    } else {
-        pane.classList.add('hidden');
-    }
-}
+    adjustHeight(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 128) + 'px'; // Max 128px
+    },
 
-async function sendChatMessage() {
-    const input = document.getElementById('chat-input');
-    const message = input.value.trim();
-    if (!message) return;
+    handleInput(el) {
+        const val = el.value;
+        const cursor = el.selectionStart;
 
-    // UI: Add User Message
-    addChatMessage('user', message);
-    input.value = '';
+        // Check for @ mention trigger
+        // Look for @ followed by characters up to cursor
+        const lastAt = val.lastIndexOf('@', cursor - 1);
 
-    // UI: Add Thinking Placeholder
-    const thinkingId = addChatMessage('ai', 'Thinking...', true);
-
-    try {
-        // 1. Retrieve Context (RAG)
-        let context = "";
-        if (window.VectorStore) {
-            updateSyncStatus("Retrieving context...", false);
-            const results = await VectorStore.search(message, 3); // Top 3 matching notes
-            const notes = await Promise.all(results.map(r => NoteDAO.get(r.noteId)));
-
-            context = notes.map(n => `Note Title: ${n.title}\nContent: ${n.body}`).join('\n\n---\n\n');
+        if (lastAt !== -1) {
+            const textAfterAt = val.substring(lastAt + 1, cursor);
+            // Ensure no spaces (simple mention) or allow spaces if we assume strict @ triggering
+            // Let's allow spaces for titles like "My Note"
+            // But verify it's not part of an email address or just random text
+            // Heuristic: If there's a newline before @ or space, it's a mention start
+            const charBefore = val[lastAt - 1];
+            if (!charBefore || /\s/.test(charBefore)) {
+                this.isMentioning = true;
+                this.mentionQuery = textAfterAt.toLowerCase();
+                this.showMentions(this.mentionQuery, lastAt);
+                return;
+            }
         }
 
-        // 2. prompt
-        const systemPrompt = `You are a helpful assistant for a note-taking app. 
-        Answer the user's question using ONLY the context provided below. 
-        If the answer is not in the context, say "I don't have that information in your notes."
-        
-        Context:
-        ${context}`;
+        this.hideMentions();
+        this.isMentioning = false;
+    },
 
-        // 3. Chat
-        const response = await AIService.chat([
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: message }
-        ]);
+    handleKeydown(e) {
+        if (this.isMentioning) {
+            const suggestions = document.getElementById('mention-suggestions');
+            if (!suggestions.classList.contains('hidden')) {
+                // Navigate suggestions (Up/Down/Enter) - For now simple Enter to pick top
+                if (e.key === 'Enter') {
+                    e.preventDefault();
+                    // Pick first
+                    const firstItem = suggestions.firstElementChild;
+                    if (firstItem) firstItem.click();
+                    return;
+                }
+                if (e.key === 'Escape') {
+                    this.hideMentions();
+                    return;
+                }
+            }
+        }
 
-        // UI: Update AI Message
-        updateChatMessage(thinkingId, response.content);
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            this.sendMessage();
+        }
+    },
 
-    } catch (e) {
-        console.error(e);
-        updateChatMessage(thinkingId, "Error: Could not connect to AI.");
+    showMentions(query, atIndex) {
+        const container = document.getElementById('mention-suggestions');
+
+        // Filter notes
+        const matches = notes.filter(n => n.title.toLowerCase().includes(query)).slice(0, 5);
+
+        if (matches.length === 0) {
+            container.classList.add('hidden');
+            return;
+        }
+
+        container.innerHTML = matches.map(n => `
+            <div onclick="ChatManager.insertMention('${n.id}', '${n.title.replace(/'/g, "\\'")}', ${atIndex})" 
+                class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center justify-between group">
+                <div class="flex items-center gap-2 overflow-hidden">
+                    <span class="material-symbols-outlined text-gray-400 text-xs">description</span>
+                    <span class="font-medium text-gray-700 dark:text-gray-200 truncate">${n.title}</span>
+                </div>
+                <!-- <span class="text-xs text-gray-400 group-hover:text-blue-500">Select</span> -->
+            </div>
+        `).join('');
+
+        container.classList.remove('hidden');
+    },
+
+    hideMentions() {
+        document.getElementById('mention-suggestions').classList.add('hidden');
+        this.isMentioning = false;
+    },
+
+    insertMention(noteId, title, atIndex) {
+        const input = document.getElementById('chat-input');
+        const val = input.value;
+        const cursor = input.selectionStart;
+
+        // Replace @query with @Title 
+        // We look for the substring we used for query
+        // Length of query:
+        const currentQuery = val.substring(atIndex + 1, cursor); // What was typed
+
+        const before = val.substring(0, atIndex);
+        const after = val.substring(cursor);
+
+        const mentionText = `@${title} `;
+
+        input.value = before + mentionText + after;
+
+        this.mentionedNotes.add(noteId);
+        this.hideMentions();
+
+        input.focus();
+    },
+
+    async sendMessage() {
+        const input = document.getElementById('chat-input');
+        const message = input.value.trim();
+        if (!message) return;
+
+        // UI: Add User Message
+        this.addMessage('user', message);
+        input.value = '';
+        input.style.height = 'auto'; // Reset size
+
+        // UI: Add Thinking
+        const thinkingId = this.addMessage('ai', 'Thinking...', true);
+
+        try {
+            // 1. Resolve Context
+            let context = "";
+            let usedNotes = [];
+
+            // A. Explicit Mentions (regex parse to confirm they are still in text)
+            // We use the Set this.mentionedNotes but verify validity
+            // Or simpler: Just Regex for @Title matches from our Note list
+            const mentionMatches = [];
+            // Sort by length desc to match longest titles first
+            const sortedNotes = [...notes].sort((a, b) => b.title.length - a.title.length);
+
+            for (const n of sortedNotes) {
+                if (message.includes(`@${n.title}`)) {
+                    mentionMatches.push(n);
+                }
+            }
+
+            if (mentionMatches.length > 0) {
+                usedNotes = mentionMatches;
+                context += "User explicitly mentioned these notes:\n\n";
+                context += mentionMatches.map(n => `[Note: ${n.title}]\n${n.body}`).join('\n\n---\n\n');
+            }
+            // B. RAG (if enabled and no explicit mentions? or Always RAG?)
+            // Implementation: If mentions exist, prioritize them. If they strictly ask about mentions, use only them.
+            // Let's do Hybrid: Mentions + RAG if mentions are few (<= 1) or context is small.
+            // For now, if mentions exist, rely heavily on them.
+            else if (window.VectorStore) {
+                // Classic RAG
+                const results = await VectorStore.search(message, 3);
+                usedNotes = await Promise.all(results.map(r => NoteDAO.get(r.noteId)));
+                context = usedNotes.map(n => `[Note: ${n.title}]\n${n.body}`).join('\n\n---\n\n');
+            }
+
+            // 2. Construct System Prompt
+            const systemPrompt = `You are a helpful assistant for a note-taking app.
+            
+            CONTEXT:
+            ${context || "No relevant notes found."}
+
+            INSTRUCTIONS:
+            - Answer the user's question based on the Context provided above.
+            - If the answer is in the Context, cite the note title (e.g., "According to [Meeting Notes]...").
+            - If the context is empty or irrelevant, you may use your general knowledge but clearly state that it's not from their notes.
+            - Format your answer with Markdown.
+            `;
+
+            // 3. Call AI
+            // We maintain a sliding window of history? Or just append?
+            // Simple History: Last 5 turns
+            const messages = [
+                { role: 'system', content: systemPrompt },
+                ...this.history.slice(-4), // Last 4 interactions
+                { role: 'user', content: message }
+            ];
+
+            const responseText = await AIService.chat(messages);
+
+            // 4. Update History
+            this.history.push({ role: 'user', content: message });
+            this.history.push({ role: 'assistant', content: responseText });
+
+            // UI: Update AI Message
+            this.updateMessage(thinkingId, responseText);
+
+            // Clear temporary mentions
+            this.mentionedNotes.clear();
+
+        } catch (e) {
+            console.error(e);
+            this.updateMessage(thinkingId, "Error: " + e.message);
+        }
+    },
+
+    addMessage(role, text, isThinking = false) {
+        const container = document.getElementById('chat-messages');
+        const div = document.createElement('div');
+        const id = Date.now().toString();
+        div.id = id;
+        div.className = "flex gap-3 " + (role === 'user' ? "flex-row-reverse" : "");
+
+        const avatar = role === 'user'
+            ? `<div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-white shadow-sm"><span class="material-symbols-outlined text-sm">person</span></div>`
+            : `<div class="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 text-white shadow-sm"><span class="material-symbols-outlined text-sm">smart_toy</span></div>`;
+
+        const bubbleClass = role === 'user'
+            ? "bg-blue-600 text-white rounded-2xl rounded-tr-none px-4 py-2.5 text-sm max-w-[85%] shadow-sm prose prose-invert prose-p:my-1 prose-ul:my-1"
+            : "bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-gray-800 dark:text-gray-200 max-w-[85%] shadow-sm prose dark:prose-invert prose-p:my-1 prose-ul:my-1 prose-headings:text-gray-900 dark:prose-headings:text-gray-100";
+
+        div.innerHTML = `
+            ${avatar}
+            <div class="${bubbleClass} ${isThinking ? 'animate-pulse' : ''}">${isThinking ? text : marked.parse(text)}</div>
+        `;
+
+        container.appendChild(div);
+        this.scrollToBottom();
+        return id;
+    },
+
+    updateMessage(id, text) {
+        const div = document.getElementById(id);
+        if (!div) return;
+        const bubble = div.querySelector('div:last-child');
+        bubble.classList.remove('animate-pulse');
+        bubble.innerHTML = marked.parse(text);
+        this.scrollToBottom();
+    },
+
+    scrollToBottom() {
+        const container = document.getElementById('chat-messages');
+        container.scrollTop = container.scrollHeight;
     }
-}
+};
 
-function addChatMessage(role, text, isThinking = false) {
-    const container = document.getElementById('chat-messages');
-    const div = document.createElement('div');
-    const id = Date.now().toString();
-    div.id = id;
-    div.className = "flex gap-3 " + (role === 'user' ? "flex-row-reverse" : "");
+window.toggleChatPane = ChatManager.togglePane; // Expose globally for header button
+window.ChatManager = ChatManager; // Expose for HTML events
 
-    const avatar = role === 'user'
-        ? `<div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-gray-600 dark:text-gray-300 text-sm">person</span></div>`
-        : `<div class="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-blue-600 dark:text-blue-400 text-sm">smart_toy</span></div>`;
-
-    const bubbleClass = role === 'user'
-        ? "bg-blue-600 text-white rounded-2xl rounded-tr-none px-4 py-2 text-sm max-w-[85%]"
-        : "bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-none px-4 py-2 text-sm text-gray-800 dark:text-gray-200 max-w-[85%]";
-
-    div.innerHTML = `
-        ${avatar}
-        <div class="${bubbleClass} ${isThinking ? 'animate-pulse' : ''}">${text}</div>
-    `;
-
-    container.appendChild(div);
-    container.scrollTop = container.scrollHeight;
-    return id;
-}
-
-function updateChatMessage(id, text) {
-    const div = document.getElementById(id);
-    if (!div) return;
-    const bubble = div.querySelector('div:last-child');
-    bubble.classList.remove('animate-pulse');
-    bubble.innerHTML = marked.parse(text); // Support Markdown in chat response
-}
