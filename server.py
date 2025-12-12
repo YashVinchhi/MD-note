@@ -1,3 +1,61 @@
+try:
+    import pystray
+    from PIL import Image, ImageDraw
+except ImportError:
+    pystray = None
+
+def create_image():
+    # Load favicon.ico for tray icon
+    try:
+        return Image.open(os.path.join(os.path.dirname(__file__), 'favicon.ico'))
+    except Exception as e:
+        print(f"Failed to load favicon.ico: {e}. Using default icon.")
+        img = Image.new('RGB', (64, 64), color=(255, 255, 255))
+        d = ImageDraw.Draw(img)
+        d.ellipse((16, 16, 48, 48), fill=(59, 130, 246))
+        return img
+
+def tray_thread():
+    if not pystray:
+        print("pystray not installed. Tray icon will not be shown.")
+        return
+    icon = pystray.Icon("SmartNotesServer")
+    icon.icon = create_image()
+    icon.title = "SmartNotes Server"
+
+    def on_start(icon, item):
+        start_server()
+
+    def on_restart(icon, item):
+        stop_server()
+        time.sleep(0.5)
+        start_server()
+
+    def on_logs(icon, item):
+        open_logs()
+
+    def on_browser(icon, item):
+        webbrowser.open(f'http://localhost:{PORT}')
+
+    def on_unload(icon, item):
+        unload_model()
+
+    def on_exit(icon, item):
+        if IS_RUNNING:
+            stop_server()
+        icon.stop()
+        os._exit(0)
+
+    icon.menu = pystray.Menu(
+        pystray.MenuItem(' 🚀  Start Server', on_start),
+        pystray.MenuItem(' 🗘   Restart Server', on_restart),
+        pystray.MenuItem('🪵   Live Log', on_logs),
+        pystray.MenuItem(' 🌐  Open in Browser', on_browser),
+        pystray.MenuItem(' ⤵   Unload Model', on_unload),
+        pystray.MenuItem(' ✖   Exit / Stop Server', on_exit)
+    )
+    icon.run()
+
 def unload_model(model_name=None):
     """Unload a model from Ollama VRAM by calling /api/generate with keep_alive=0s."""
     try:
@@ -240,14 +298,21 @@ def main():
     if not os.path.exists(LOG_FILE):
         with open(LOG_FILE, 'w') as f: f.write(f"Server Log Initialized\n")
 
+    # Start tray icon in a separate thread
+    if pystray:
+        t = threading.Thread(target=tray_thread, daemon=True)
+        t.start()
+    else:
+        print("pystray not installed. No tray icon will be shown.")
+
     # Auto-start
     start_server()
-    
+
     while True:
         try:
             print_menu()
             choice = input("\nSelect option [1-9]: ").strip()
-            
+
             if choice == '1':
                 start_server()
             elif choice == '2':
@@ -274,7 +339,7 @@ def main():
             else:
                 print("Invalid option. Please try again.")
                 time.sleep(1)
-                
+
         except KeyboardInterrupt:
             print("\nType '7' to exit.")
         except Exception as e:
