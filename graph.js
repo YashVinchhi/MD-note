@@ -87,73 +87,71 @@ async function renderGraph(containerId) {
         });
     });
 
-    // 2. Generate Edges
+
+    // --- Deduplication logic ---
+    // We'll use a Map to store unique edges by sorted node pair (A,B)
+    // and keep the most "distinctive" style (WikiLink > AI > Tag)
+    const edgeMap = new Map();
+
+    // Helper to get a unique key for an edge (undirected)
+    function edgeKey(a, b) {
+        return [a, b].sort().join('::');
+    }
+
+    // 1. WikiLinks
     notes.forEach(note => {
-        // A. WikiLinks Edges
         if (note.wikiLinks && note.wikiLinks.length > 0) {
             note.wikiLinks.forEach(linkTitle => {
                 const targetId = findNoteIdByTitle(linkTitle);
                 if (targetId) {
-                    edgesData.push({ from: note.id, to: targetId });
+                    const key = edgeKey(note.id, targetId);
+                    edgeMap.set(key, { from: note.id, to: targetId });
                 }
             });
         }
-
-        // B. AI Links Edges (Dashed Purple)
-        if (note.aiLinks && note.aiLinks.length > 0) {
-            note.aiLinks.forEach(targetId => {
-                // Verify target exists
-                if (notes.find(n => n.id === targetId)) {
-                    edgesData.push({
-                        from: note.id,
-                        to: targetId,
-                        dashes: true,
-                        color: { inherit: false, color: '#a855f7', opacity: 0.6 } // Purple-500
-                    });
-                }
-            });
-        }
-
-        // C. Tag Connections (Shared Tags)
-        // ... (existing logic or new?)
-        // Existing graph.js didn't look like it had tag connections implemented in previous view?
-        // Step 443 view only showed WikiLinks section ending at line 100.
-        // I will assume lines 101+ handled tags or were empty.
-        // Better to just insert AI links block.
     });
 
-    // B. Shared Tags Edges (Optional: Can create "Cluster" or dense edges)
-    // Heuristic: If 2 notes share a tag, connect them? 
-    // This might create a hairball. Let's start with WikiLinks ONLY for cleaner graph.
-    // User Requirement: "OR Note A and Note B share a unique tag"
-    // Let's implement: For every pair of notes, if they intersect tags, add edge.
-    // Optimization: Only do this for "unique" tags? "unique tag" might mean specific non-generic ones?
-    // Let's just do: match tags strictly.
+    // 2. AI Links (only add if not already present as WikiLink)
+    notes.forEach(note => {
+        if (note.aiLinks && note.aiLinks.length > 0) {
+            note.aiLinks.forEach(targetId => {
+                if (notes.find(n => n.id === targetId)) {
+                    const key = edgeKey(note.id, targetId);
+                    if (!edgeMap.has(key)) {
+                        edgeMap.set(key, {
+                            from: note.id,
+                            to: targetId,
+                            dashes: true,
+                            color: { inherit: false, color: '#a855f7', opacity: 0.6 }
+                        });
+                    }
+                }
+            });
+        }
+    });
 
-    // This is O(N^2), careful with large DB. 
-    // For < 100 notes it's fine.
-
-
-    // Tag Edges (Separate Loop for clarity)
-    // We iterate all unique pairs
+    // 3. Tag Connections (only add if not already present as WikiLink or AI Link)
     for (let i = 0; i < notes.length; i++) {
         for (let j = i + 1; j < notes.length; j++) {
             const A = notes[i];
             const B = notes[j];
-
-            // Intersection of tags
             const commonTags = A.tags.filter(tag => B.tags.includes(tag));
-
             if (commonTags.length > 0) {
-                edgesData.push({
-                    from: A.id,
-                    to: B.id,
-                    color: { opacity: 0.2 }, // Fainter lines for tags
-                    dashes: true
-                });
+                const key = edgeKey(A.id, B.id);
+                if (!edgeMap.has(key)) {
+                    edgeMap.set(key, {
+                        from: A.id,
+                        to: B.id,
+                        color: { opacity: 0.2 },
+                        dashes: true
+                    });
+                }
             }
         }
     }
+
+    // Add all unique edges
+    edgesData.push(...edgeMap.values());
 
     graphNodes.add(nodesData);
     graphEdges.add(edgesData);

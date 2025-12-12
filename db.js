@@ -19,13 +19,13 @@ const db = new Dexie('SynapseDB');
 // Define Schema
 // 'id' is our primary key (string UUID from app.js)
 // We index fields we want to query/filter by: tags, pinned, updatedAt
-db.version(1).stores({
+db.version(60).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary', // v1 schema
     settings: 'key'
 });
 
 // Upgrade to v2
-db.version(2).stores({
+db.version(60).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId', // Added folderId
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
@@ -33,7 +33,7 @@ db.version(2).stores({
 });
 
 // Upgrade to v3
-db.version(3).stores({
+db.version(60).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
@@ -42,7 +42,7 @@ db.version(3).stores({
 });
 
 // Upgrade to v4
-db.version(4).stores({
+db.version(60).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
@@ -52,7 +52,7 @@ db.version(4).stores({
 });
 
 // Upgrade to v5 - Chat History
-db.version(5).stores({
+db.version(60).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
@@ -259,5 +259,5 @@ migrateFromLocalStorage().then(() => {
     // but migration is async. 
     // We will emit an event or just let app.js call helper functions.
     console.log('SynapseDB Ready');
-    window.dispatchEvent(new Event('db-ready'));
 });
+window.dispatchEvent(new Event('db-ready'));

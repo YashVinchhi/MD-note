@@ -50,17 +50,13 @@ let notes = []; // Local cache of notes for rendering
 let activeNoteId = null;
 let isPreviewMode = false;
 
-
-
 // --- Core Functions ---
-
 // Load all notes from DB and render
 async function refreshNotes(filter = 'all', searchQuery = '') {
     try {
         if (searchQuery) {
             // Check for Semantic Search Toggle
             const isSemantic = document.getElementById('semantic-search-toggle')?.checked;
-
             if (isSemantic && window.VectorStore) {
                 // RAG Search
                 const results = await VectorStore.search(searchQuery, 10);

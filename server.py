@@ -47,12 +47,12 @@ def tray_thread():
         os._exit(0)
 
     icon.menu = pystray.Menu(
-        pystray.MenuItem(' 🚀  Start Server', on_start),
-        pystray.MenuItem(' 🗘   Restart Server', on_restart),
-        pystray.MenuItem('🪵   Live Log', on_logs),
-        pystray.MenuItem(' 🌐  Open in Browser', on_browser),
-        pystray.MenuItem(' ⤵   Unload Model', on_unload),
-        pystray.MenuItem(' ✖   Exit / Stop Server', on_exit)
+        pystray.MenuItem('Start Server', on_start),
+        pystray.MenuItem('Restart Server', on_restart),
+        pystray.MenuItem('Live Log', on_logs),
+        pystray.MenuItem('Open in Browser', on_browser),
+        pystray.MenuItem('Unload Model', on_unload),
+        pystray.MenuItem('Exit / Stop Server', on_exit)
     )
     icon.run()
 
