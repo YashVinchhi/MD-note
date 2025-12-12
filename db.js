@@ -1,3 +1,14 @@
+// UUID fallback for environments without crypto.randomUUID
+function uuidv4() {
+    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        return window.crypto.randomUUID();
+    }
+    // Fallback implementation
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+        var r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
 /**
  * SynapseDB - Database Layer using Dexie.js
  * Handles storage, migration, and CRUD operations
@@ -169,7 +180,7 @@ const SmartViewDAO = {
 
 const AttachmentDAO = {
     async save(blob, noteId) {
-        const id = crypto.randomUUID();
+        const id = uuidv4();
         await db.attachments.put({
             id,
             noteId,
@@ -195,7 +206,7 @@ const ConversationDAO = {
         return await db.conversations.get(id);
     },
     async create(title = 'New Chat') {
-        const id = crypto.randomUUID();
+        const id = uuidv4();
         const now = Date.now();
         const conversation = { id, title, createdAt: now, updatedAt: now };
         await db.conversations.put(conversation);
@@ -223,7 +234,7 @@ const ChatMessageDAO = {
         return await db.chat_messages.where('conversationId').equals(conversationId).sortBy('timestamp');
     },
     async save(message) {
-        const id = message.id || crypto.randomUUID();
+        const id = message.id || uuidv4();
         const msg = {
             id,
             conversationId: message.conversationId,

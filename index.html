@@ -222,6 +222,18 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
+                    <button onclick="exportAllNotes()"
+                        class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+                        title="Export All Notes">
+                        <span class="material-symbols-outlined text-[18px]">file_download</span>
+                        <span class="hidden md:inline">Export All</span>
+                    </button>
+                    <button onclick="importAllNotes()"
+                        class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
+                        title="Import Notes">
+                        <span class="material-symbols-outlined text-[18px]">file_upload</span>
+                        <span class="hidden md:inline">Import</span>
+                    </button>
                     <button onclick="toggleSplitMode()" id="split-btn"
                         class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
                         title="Side-by-Side View">

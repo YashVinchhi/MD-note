@@ -1,3 +1,45 @@
+// --- Import/Export All Notes ---
+window.exportAllNotes = async function() {
+    try {
+        const allNotes = await NoteDAO.getAll();
+        const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(allNotes, null, 2));
+        const dlAnchor = document.createElement('a');
+        dlAnchor.setAttribute("href", dataStr);
+        dlAnchor.setAttribute("download", "notes-export.json");
+        document.body.appendChild(dlAnchor);
+        dlAnchor.click();
+        dlAnchor.remove();
+        showToast('All notes exported!');
+    } catch (err) {
+        showToast('Export failed: ' + err.message, true);
+    }
+}
+
+window.importAllNotes = async function() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        try {
+            const text = await file.text();
+            const importedNotes = JSON.parse(text);
+            if (!Array.isArray(importedNotes)) throw new Error('Invalid format');
+            for (const note of importedNotes) {
+                // Optionally, check for required fields
+                if (note.id && note.title) {
+                    await NoteDAO.save(note);
+                }
+            }
+            await refreshNotes();
+            showToast('Notes imported!');
+        } catch (err) {
+            showToast('Import failed: ' + err.message, true);
+        }
+    };
+    input.click();
+}
 /**
  * Synapse Application Logic
  * Integrates: Dexie DB, UI Rendering, Event Handling

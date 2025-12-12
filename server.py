@@ -1,3 +1,24 @@
+def unload_model(model_name=None):
+    """Unload a model from Ollama VRAM by calling /api/generate with keep_alive=0s."""
+    try:
+        name = model_name or SELECTED_MODEL
+        url = "http://localhost:11434/api/generate"
+        data = json.dumps({
+            "model": name,
+            "prompt": "unload",
+            "keep_alive": "0s"
+        }).encode()
+        req = urllib.request.Request(url, data=data, method="POST")
+        req.add_header('Content-Type', 'application/json')
+        with urllib.request.urlopen(req) as response:
+            if response.status == 200:
+                print(f"✓ Unload request sent for model '{name}'. It should be removed from VRAM soon.")
+                logging.info(f"Unload request sent for model '{name}' (keep_alive=0s)")
+            else:
+                print(f"Failed to send unload request for model '{name}'. Status: {response.status}")
+    except Exception as e:
+        print(f"Error unloading model: {e}")
+        logging.error(f"Error unloading model: {e}")
 #!/usr/bin/env python3
 """
 SmartNotes Advanced Server
@@ -16,7 +37,7 @@ import sys
 import webbrowser
 import logging
 
-PORT = 8000
+PORT = 50001
 SERVER_THREAD = None
 HTTPD = None
 IS_RUNNING = False
@@ -211,6 +232,7 @@ def print_menu():
     print(f"║  6. Clear Screen                     ║")
     print(f"║  7. Exit                             ║")
     print(f"║  8. Select AI Model                  ║")
+    print(f"║  9. Unload Model from VRAM           ║")
     print(f"╚══════════════════════════════════════╝")
 
 def main():
@@ -224,7 +246,7 @@ def main():
     while True:
         try:
             print_menu()
-            choice = input("\nSelect option [1-7]: ").strip()
+            choice = input("\nSelect option [1-9]: ").strip()
             
             if choice == '1':
                 start_server()
@@ -247,6 +269,8 @@ def main():
                 sys.exit(0)
             elif choice == '8':
                 select_model_menu()
+            elif choice == '9':
+                unload_model()
             else:
                 print("Invalid option. Please try again.")
                 time.sleep(1)
