@@ -638,21 +638,7 @@ settingsModal.addEventListener('click', (e) => {
 });
 
 
-// --- Cleanup (User Request) ---
-(async function removeGroupIdeaNote() {
-    try {
-        const notes = await NoteDAO.getAll();
-        // Match any note containing "group idea" (e.g., "Whatsapp Group Idea")
-        const target = notes.find(n => n.title && n.title.toLowerCase().includes('group idea'));
-        if (target) {
-            await NoteDAO.delete(target.id);
-            console.log(`Removed note "${target.title}" per request.`);
-            refreshNotes();
-        }
-    } catch (e) {
-        console.error('Cleanup failed:', e);
-    }
-})();
+
 
 // Check Dark Mode
 if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
