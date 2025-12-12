@@ -71,12 +71,39 @@ async function saveCurrentNote() {
 
         // Auto-Index for Vector Search (Debounced? app.js save is already debounced)
         if (window.VectorStore) {
-            // No await, let it run in background
-            VectorStore.indexNote(note).catch(console.error);
+            // Index the note first
+            await VectorStore.indexNote(note);
+
+            // Auto-link: Find similar notes and update aiLinks
+            await autoLinkNote(note);
         }
 
     } catch (err) {
         console.error('Save failed:', err);
+    }
+}
+
+// Auto-link note to similar notes using semantic search
+async function autoLinkNote(note) {
+    if (!window.VectorStore || !note.body || note.body.trim().length < 20) return;
+
+    try {
+        // Search for similar notes
+        const results = await VectorStore.search(note.title + ' ' + note.body.substring(0, 200), 5);
+
+        // Filter out self and get unique note IDs
+        const similarNoteIds = results
+            .filter(r => r.noteId !== note.id && r.score > 0.3) // Similarity threshold
+            .map(r => r.noteId);
+
+        if (similarNoteIds.length > 0) {
+            // Update the note's aiLinks
+            note.aiLinks = [...new Set([...(note.aiLinks || []), ...similarNoteIds])].slice(0, 5); // Max 5 links
+            await NoteDAO.save(note);
+            console.log(`Auto-linked note "${note.title}" to ${similarNoteIds.length} similar notes`);
+        }
+    } catch (err) {
+        console.error('Auto-link failed:', err);
     }
 }
 
@@ -302,6 +329,10 @@ const handleInput = (e) => {
         e.target.style.height = e.target.scrollHeight + 'px';
     } else if (e.target.id === 'note-body') {
         note.body = e.target.value;
+        // Live Preview in Split Mode
+        if (isSplitMode) {
+            renderMarkdownPreview();
+        }
     }
 
     note.updatedAt = Date.now();
@@ -364,6 +395,9 @@ document.getElementById('omnibar-input').addEventListener('keydown', (e) => {
 });
 
 // UI Toggles
+// UI Toggles
+let isSplitMode = false;
+
 window.togglePane = (pane) => {
     const nav = document.getElementById('navigation-pane');
     const list = document.getElementById('note-list-pane');
@@ -377,7 +411,138 @@ window.togglePane = (pane) => {
     }
 };
 
+window.toggleSplitMode = async () => {
+    isSplitMode = !isSplitMode;
+    const wrapper = document.getElementById('content-wrapper');
+    const editor = document.getElementById('note-body');
+    const preview = document.getElementById('note-preview');
+    const container = document.getElementById('editor-container'); // Only used for width constraint
+    const btn = document.getElementById('split-btn');
+    const syncBtn = document.getElementById('scroll-sync-btn');
+
+    if (isSplitMode) {
+        // Force out of standard preview mode if active
+        if (isPreviewMode) {
+            await window.togglePreviewMode();
+            isSplitMode = true; // Reset
+        }
+
+        // Show both
+        editor.classList.remove('hidden');
+        preview.classList.remove('hidden');
+
+        // Allow container to expand
+        container.classList.remove('max-w-3xl');
+        container.classList.add('max-w-none');
+
+        // 1. Flex the Wrapper
+        wrapper.classList.add('flex', 'gap-6');
+
+        // 2. Size the Editor
+        editor.classList.remove('w-full');
+        editor.classList.add('w-1/2', 'pr-4', 'border-r', 'border-gray-200', 'dark:border-gray-800', 'overflow-y-auto');
+
+        // 3. Size the Preview
+        preview.classList.add('w-1/2', 'pl-4', 'overflow-y-auto');
+        preview.style.maxWidth = '100%';
+
+        // Render
+        await renderMarkdownPreview();
+
+        // Show Scroll Sync button
+        syncBtn.classList.remove('hidden');
+        syncBtn.classList.add('flex');
+
+        // UI Feedback
+        btn.classList.add('text-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+        btn.querySelector('span:not(.material-symbols-outlined)').innerText = 'Split On';
+
+        // Setup scroll sync listeners
+        setupScrollSync();
+    } else {
+        // Revert Container
+        container.classList.remove('max-w-none');
+        container.classList.add('max-w-3xl');
+
+        // Un-Flex Wrapper
+        wrapper.classList.remove('flex', 'gap-6');
+
+        // Reset Editor
+        editor.classList.add('w-full');
+        editor.classList.remove('w-1/2', 'pr-4', 'border-r', 'border-gray-200', 'dark:border-gray-800', 'overflow-y-auto');
+
+        // Reset Preview
+        preview.classList.remove('w-1/2', 'pl-4', 'overflow-y-auto');
+        preview.classList.add('hidden');
+        preview.style.maxWidth = '';
+
+        // Hide Scroll Sync button
+        syncBtn.classList.add('hidden');
+        syncBtn.classList.remove('flex', 'text-green-500', 'bg-green-50', 'dark:bg-green-900/20');
+
+        // Disable scroll sync
+        isScrollSyncEnabled = false;
+        removeScrollSync();
+
+        // UI Feedback
+        btn.classList.remove('text-blue-500', 'bg-blue-50', 'dark:bg-blue-900/20');
+        btn.querySelector('span:not(.material-symbols-outlined)').innerText = 'Split';
+    }
+};
+
+// --- Scroll Sync ---
+let isScrollSyncEnabled = false;
+let scrollSyncHandler = null;
+
+function setupScrollSync() {
+    const editor = document.getElementById('note-body');
+    const preview = document.getElementById('note-preview');
+
+    scrollSyncHandler = (source) => {
+        if (!isScrollSyncEnabled || !isSplitMode) return;
+
+        const sourceEl = source === 'editor' ? editor : preview;
+        const targetEl = source === 'editor' ? preview : editor;
+
+        const scrollPercentage = sourceEl.scrollTop / (sourceEl.scrollHeight - sourceEl.clientHeight);
+        targetEl.scrollTop = scrollPercentage * (targetEl.scrollHeight - targetEl.clientHeight);
+    };
+
+    editor.addEventListener('scroll', () => scrollSyncHandler('editor'));
+    preview.addEventListener('scroll', () => scrollSyncHandler('preview'));
+}
+
+function removeScrollSync() {
+    const editor = document.getElementById('note-body');
+    const preview = document.getElementById('note-preview');
+
+    // Reset listeners by recreating the function (simple approach)
+    // A more robust approach would store and remove named listeners.
+    // For now, the handler checks isSplitMode and isScrollSyncEnabled, so it's safe.
+}
+
+window.toggleScrollSync = () => {
+    isScrollSyncEnabled = !isScrollSyncEnabled;
+    const btn = document.getElementById('scroll-sync-btn');
+
+    if (isScrollSyncEnabled) {
+        btn.classList.add('text-green-500', 'bg-green-50', 'dark:bg-green-900/20');
+        btn.querySelector('span:not(.material-symbols-outlined)').innerText = 'Sync On';
+    } else {
+        btn.classList.remove('text-green-500', 'bg-green-50', 'dark:bg-green-900/20');
+        btn.querySelector('span:not(.material-symbols-outlined)').innerText = 'Sync';
+    }
+};
+
 window.togglePreviewMode = async () => {
+    // Disable split mode if active
+    if (isSplitMode) {
+        await window.toggleSplitMode();
+        // Then continue to toggle to preview... or just stop? 
+        // User clicked Preview button while in Split.
+        // Let's just switch to full preview.
+    }
+
     isPreviewMode = !isPreviewMode;
     const editor = document.getElementById('note-body');
     const preview = document.getElementById('note-preview');
@@ -451,20 +616,82 @@ function exportNote() {
     const note = notes.find(n => n.id === activeNoteId);
     if (!note) return;
 
-    const blob = new Blob([note.body], { type: 'text/plain' });
+    // Convert Markdown to HTML
+    const htmlContent = marked.parse(note.body);
+
+    // Create a standalone HTML document
+    const fullHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>${note.title || 'Note'}</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 2rem;
+            color: #333;
+        }
+        h1 { border-bottom: 2px solid #eaeaea; padding-bottom: 0.5rem; }
+        pre {
+            background: #f4f4f4;
+            padding: 1rem;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        code {
+            background: #f4f4f4;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+        blockquote {
+            border-left: 4px solid #ccc;
+            margin: 0;
+            padding-left: 1rem;
+            color: #666;
+        }
+        img { max-width: 100%; height: auto; border-radius: 8px; }
+        table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f8f9fa; }
+        .mermaid { text-align: center; margin: 1rem 0; }
+    </style>
+</head>
+<body>
+    <h1>${note.title || 'Untitled'}</h1>
+    ${htmlContent}
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+    <script>
+        mermaid.initialize({ startOnLoad: true });
+    </script>
+</body>
+</html>`;
+
+    const blob = new Blob([fullHtml], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${note.title || 'note'}.txt`;
+    a.download = `${note.title || 'note'}.html`;
     a.click();
     URL.revokeObjectURL(url);
 }
 
-function printNote() {
+async function printNote() {
     if (!activeNoteId) return;
-    // Switch to preview mode for printing if not already
-    if (!isPreviewMode) togglePreviewMode();
-    setTimeout(() => window.print(), 500); // Wait for render
+
+    // Ensure we are in preview mode
+    if (!isPreviewMode) {
+        await togglePreviewMode();
+    }
+
+    // Allow a slight buffer for Mermaid to render if present
+    setTimeout(() => {
+        window.print();
+    }, 500);
 }
 
 
@@ -660,11 +887,25 @@ settingsModal.addEventListener('click', (e) => {
 
 
 
-
-// Check Dark Mode
-if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
-    document.documentElement.classList.add('dark');
+// Dark Mode with localStorage persistence
+function initTheme() {
+    const savedTheme = localStorage.getItem('theme');
+    if (savedTheme === 'dark') {
+        document.documentElement.classList.add('dark');
+    } else if (savedTheme === 'light') {
+        document.documentElement.classList.remove('dark');
+    } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        document.documentElement.classList.add('dark');
+    }
 }
+
+function toggleTheme() {
+    const isDark = document.documentElement.classList.toggle('dark');
+    localStorage.setItem('theme', isDark ? 'dark' : 'light');
+}
+
+// Initialize theme on load
+initTheme();
 
 // --- Advanced Org Logic ---
 
@@ -1282,62 +1523,201 @@ function toggleCheckboxInSource(index, isChecked) {
     editor.dispatchEvent(event);
 }
 
-// --- Chat Interface Logic ---
+// --- Chat Interface Logic (ChatGPT-style) ---
 
 const ChatManager = {
-    history: [], // [{role, content}]
-    mentionQuery: null, // Current mention search string
+    history: [], // [{role, content}] - Current conversation messages (for AI context)
+    activeConversationId: null,
+    mentionQuery: null,
     isMentioning: false,
-    mentionedNotes: new Set(), // IDs of notes explicitly mentioned in current draft
+    mentionedNotes: new Set(),
 
-    togglePane() {
+    // --- View Toggles ---
+    async toggleMiniChat() {
         const pane = document.getElementById('chat-pane');
         pane.classList.toggle('hidden');
         if (!pane.classList.contains('hidden')) {
             setTimeout(() => document.getElementById('chat-input').focus(), 100);
+            // If no active conversation, try to load the most recent or create new
+            if (!this.activeConversationId) {
+                const convs = await ConversationDAO.getAll();
+                if (convs.length > 0) {
+                    await this.loadConversation(convs[0].id);
+                } else {
+                    await this.createNewConversation();
+                }
+            } else {
+                // Reload current conversation to sync UI
+                await this.loadConversation(this.activeConversationId);
+            }
         }
     },
 
-    adjustHeight(el) {
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, 128) + 'px'; // Max 128px
+    async openFullScreen() {
+        document.getElementById('chat-pane').classList.add('hidden'); // Close mini
+        document.getElementById('chat-screen').classList.remove('hidden');
+
+        // Load conversation list
+        await this.renderConversationList();
+
+        // If no active conversation, create one
+        if (!this.activeConversationId) {
+            await this.createNewConversation();
+        } else {
+            await this.loadConversation(this.activeConversationId);
+        }
+
+        setTimeout(() => document.getElementById('chat-screen-input').focus(), 100);
     },
 
-    handleInput(el) {
+    closeFullScreen() {
+        document.getElementById('chat-screen').classList.add('hidden');
+    },
+
+    // --- Conversation Management ---
+    async createNewConversation() {
+        const conv = await ConversationDAO.create('New Chat');
+        this.activeConversationId = conv.id;
+        this.history = [];
+
+        // Clear both message containers
+        document.getElementById('chat-messages').innerHTML = this.getWelcomeMessage();
+        document.getElementById('chat-screen-messages').innerHTML = this.getWelcomeMessage();
+        document.getElementById('chat-screen-title').textContent = conv.title;
+
+        // Refresh sidebar
+        await this.renderConversationList();
+    },
+
+    async loadConversation(id) {
+        this.activeConversationId = id;
+        const messages = await ChatMessageDAO.getByConversationId(id);
+        const conv = await ConversationDAO.get(id);
+
+        // Update history for AI context
+        this.history = messages.map(m => ({ role: m.role, content: m.content }));
+
+        // Render to both containers
+        this.renderMessagesToContainer('chat-messages', messages);
+        this.renderMessagesToContainer('chat-screen-messages', messages);
+
+        // Update title
+        document.getElementById('chat-screen-title').textContent = conv?.title || 'Chat';
+
+        // Highlight in sidebar
+        this.highlightConversation(id);
+    },
+
+    async deleteCurrentConversation() {
+        if (!this.activeConversationId) return;
+        if (!confirm('Delete this conversation?')) return;
+
+        await ConversationDAO.delete(this.activeConversationId);
+        this.activeConversationId = null;
+        this.history = [];
+
+        // Reload or create new
+        const allConvs = await ConversationDAO.getAll();
+        if (allConvs.length > 0) {
+            await this.loadConversation(allConvs[0].id);
+        } else {
+            await this.createNewConversation();
+        }
+        await this.renderConversationList();
+    },
+
+    async renderConversationList() {
+        const container = document.getElementById('conversation-list');
+        const convs = await ConversationDAO.getAll();
+
+        container.innerHTML = convs.map(c => `
+            <button onclick="ChatManager.loadConversation('${c.id}')"
+                data-conv-id="${c.id}"
+                class="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-gray-800 flex items-center gap-2 transition-colors ${c.id === this.activeConversationId ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'}">
+                <span class="material-symbols-outlined text-[18px] opacity-60">chat_bubble</span>
+                <span class="truncate flex-1">${c.title}</span>
+            </button>
+        `).join('');
+    },
+
+    highlightConversation(id) {
+        const container = document.getElementById('conversation-list');
+        container.querySelectorAll('button').forEach(btn => {
+            if (btn.dataset.convId === id) {
+                btn.classList.add('bg-blue-100', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
+            } else {
+                btn.classList.remove('bg-blue-100', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
+            }
+        });
+    },
+
+    renderMessagesToContainer(containerId, messages) {
+        const container = document.getElementById(containerId);
+        if (messages.length === 0) {
+            container.innerHTML = this.getWelcomeMessage();
+            return;
+        }
+        container.innerHTML = messages.map(m => this.createMessageHTML(m.role === 'user' ? 'user' : 'ai', m.content)).join('');
+        container.scrollTop = container.scrollHeight;
+    },
+
+    getWelcomeMessage() {
+        return `
+            <div class="flex gap-3">
+                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow shadow-indigo-500/30">
+                    <span class="material-symbols-outlined text-white text-sm">smart_toy</span>
+                </div>
+                <div class="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-none px-4 py-2 text-sm text-gray-800 dark:text-gray-200 max-w-[85%]">
+                    Hello! I can answer questions based on your notes. Type @ to mention specific notes.
+                </div>
+            </div>
+        `;
+    },
+
+    createMessageHTML(role, text, isThinking = false) {
+        const avatar = role === 'user'
+            ? `<div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 text-white shadow shadow-indigo-500/30"><span class="material-symbols-outlined text-sm">person</span></div>`
+            : `<div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 text-white shadow shadow-indigo-500/30"><span class="material-symbols-outlined text-sm">smart_toy</span></div>`;
+
+        const bubbleClass = role === 'user'
+            ? "bg-gradient-to-br from-blue-500 to-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-2.5 text-sm max-w-[85%] shadow shadow-indigo-500/30 prose prose-invert prose-p:my-1"
+            : "bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-gray-800 dark:text-gray-200 max-w-[85%] shadow-sm prose dark:prose-invert prose-p:my-1";
+
+        const content = isThinking ? text : marked.parse(text);
+        return `<div class="flex gap-3 ${role === 'user' ? 'flex-row-reverse' : ''}">${avatar}<div class="${bubbleClass} ${isThinking ? 'animate-pulse' : ''}">${content}</div></div>`;
+    },
+
+    // --- Input Handling ---
+    adjustHeight(el) {
+        el.style.height = 'auto';
+        el.style.height = Math.min(el.scrollHeight, 128) + 'px';
+    },
+
+    handleInput(el, mode = 'mini') {
         const val = el.value;
         const cursor = el.selectionStart;
-
-        // Check for @ mention trigger
-        // Look for @ followed by characters up to cursor
         const lastAt = val.lastIndexOf('@', cursor - 1);
 
         if (lastAt !== -1) {
             const textAfterAt = val.substring(lastAt + 1, cursor);
-            // Ensure no spaces (simple mention) or allow spaces if we assume strict @ triggering
-            // Let's allow spaces for titles like "My Note"
-            // But verify it's not part of an email address or just random text
-            // Heuristic: If there's a newline before @ or space, it's a mention start
             const charBefore = val[lastAt - 1];
             if (!charBefore || /\s/.test(charBefore)) {
                 this.isMentioning = true;
                 this.mentionQuery = textAfterAt.toLowerCase();
-                this.showMentions(this.mentionQuery, lastAt);
+                this.showMentions(this.mentionQuery, lastAt, mode);
                 return;
             }
         }
-
         this.hideMentions();
         this.isMentioning = false;
     },
 
-    handleKeydown(e) {
+    handleKeydown(e, mode = 'mini') {
         if (this.isMentioning) {
             const suggestions = document.getElementById('mention-suggestions');
             if (!suggestions.classList.contains('hidden')) {
-                // Navigate suggestions (Up/Down/Enter) - For now simple Enter to pick top
                 if (e.key === 'Enter') {
                     e.preventDefault();
-                    // Pick first
                     const firstItem = suggestions.firstElementChild;
                     if (firstItem) firstItem.click();
                     return;
@@ -1348,17 +1728,14 @@ const ChatManager = {
                 }
             }
         }
-
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            this.sendMessage();
+            this.sendMessage(mode);
         }
     },
 
-    showMentions(query, atIndex) {
+    showMentions(query, atIndex, mode = 'mini') {
         const container = document.getElementById('mention-suggestions');
-
-        // Filter notes
         const matches = notes.filter(n => n.title.toLowerCase().includes(query)).slice(0, 5);
 
         if (matches.length === 0) {
@@ -1367,16 +1744,12 @@ const ChatManager = {
         }
 
         container.innerHTML = matches.map(n => `
-            <div onclick="ChatManager.insertMention('${n.id}', '${n.title.replace(/'/g, "\\'")}', ${atIndex})" 
-                class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center justify-between group">
-                <div class="flex items-center gap-2 overflow-hidden">
-                    <span class="material-symbols-outlined text-gray-400 text-xs">description</span>
-                    <span class="font-medium text-gray-700 dark:text-gray-200 truncate">${n.title}</span>
-                </div>
-                <!-- <span class="text-xs text-gray-400 group-hover:text-blue-500">Select</span> -->
+            <div onclick="ChatManager.insertMention('${n.id}', '${n.title.replace(/'/g, "\\'")}', ${atIndex}, '${mode}')" 
+                class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center gap-2">
+                <span class="material-symbols-outlined text-gray-400 text-xs">description</span>
+                <span class="font-medium text-gray-700 dark:text-gray-200 truncate">${n.title}</span>
             </div>
         `).join('');
-
         container.classList.remove('hidden');
     },
 
@@ -1385,156 +1758,171 @@ const ChatManager = {
         this.isMentioning = false;
     },
 
-    insertMention(noteId, title, atIndex) {
-        const input = document.getElementById('chat-input');
+    insertMention(noteId, title, atIndex, mode = 'mini') {
+        const inputId = mode === 'mini' ? 'chat-input' : 'chat-screen-input';
+        const input = document.getElementById(inputId);
         const val = input.value;
         const cursor = input.selectionStart;
 
-        // Replace @query with @Title 
-        // We look for the substring we used for query
-        // Length of query:
-        const currentQuery = val.substring(atIndex + 1, cursor); // What was typed
-
         const before = val.substring(0, atIndex);
         const after = val.substring(cursor);
-
         const mentionText = `@${title} `;
 
         input.value = before + mentionText + after;
-
         this.mentionedNotes.add(noteId);
         this.hideMentions();
-
         input.focus();
     },
 
-    async sendMessage() {
-        const input = document.getElementById('chat-input');
+    // --- Send Message ---
+    async sendMessage(mode = 'mini') {
+        const inputId = mode === 'mini' ? 'chat-input' : 'chat-screen-input';
+        const messagesId = mode === 'mini' ? 'chat-messages' : 'chat-screen-messages';
+        const input = document.getElementById(inputId);
         const message = input.value.trim();
         if (!message) return;
 
+        // Ensure conversation exists
+        if (!this.activeConversationId) {
+            await this.createNewConversation();
+        }
+
         // UI: Add User Message
-        this.addMessage('user', message);
+        this.addMessageToUI(messagesId, 'user', message);
         input.value = '';
-        input.style.height = 'auto'; // Reset size
+        input.style.height = 'auto';
+
+        // Save to DB
+        await ChatMessageDAO.save({
+            conversationId: this.activeConversationId,
+            role: 'user',
+            content: message
+        });
+
+        // Update conversation title on first user message
+        if (this.history.length === 0) {
+            const title = message.substring(0, 50) + (message.length > 50 ? '...' : '');
+            await ConversationDAO.updateTitle(this.activeConversationId, title);
+            document.getElementById('chat-screen-title').textContent = title;
+            this.renderConversationList();
+        }
 
         // UI: Add Thinking
-        const thinkingId = this.addMessage('ai', 'Thinking...', true);
+        const thinkingId = this.addMessageToUI(messagesId, 'ai', 'Thinking...', true);
 
         try {
             // 1. Resolve Context
             let context = "";
             let usedNotes = [];
 
-            // A. Explicit Mentions (regex parse to confirm they are still in text)
-            // We use the Set this.mentionedNotes but verify validity
-            // Or simpler: Just Regex for @Title matches from our Note list
-            const mentionMatches = [];
-            // Sort by length desc to match longest titles first
-            const sortedNotes = [...notes].sort((a, b) => b.title.length - a.title.length);
+            // A. Check for active note (highest priority if viewing a note)
+            console.log('ChatManager: activeNoteId =', activeNoteId);
+            if (activeNoteId) {
+                const activeNote = notes.find(n => n.id === activeNoteId);
+                console.log('ChatManager: Found active note?', !!activeNote, activeNote?.title);
+                if (activeNote) {
+                    usedNotes.push(activeNote);
+                    context += `CURRENTLY VIEWING NOTE:\n[Note: ${activeNote.title}]\n${activeNote.body}\n\n---\n\n`;
+                }
+            }
 
+            // B. Explicit Mentions
+            const mentionMatches = [];
+            const sortedNotes = [...notes].sort((a, b) => b.title.length - a.title.length);
             for (const n of sortedNotes) {
-                if (message.includes(`@${n.title}`)) {
+                if (message.includes(`@${n.title}`) && n.id !== activeNoteId) {
                     mentionMatches.push(n);
                 }
             }
 
             if (mentionMatches.length > 0) {
-                usedNotes = mentionMatches;
+                usedNotes = [...usedNotes, ...mentionMatches];
                 context += "User explicitly mentioned these notes:\n\n";
                 context += mentionMatches.map(n => `[Note: ${n.title}]\n${n.body}`).join('\n\n---\n\n');
             }
-            // B. RAG (if enabled and no explicit mentions? or Always RAG?)
-            // Implementation: If mentions exist, prioritize them. If they strictly ask about mentions, use only them.
-            // Let's do Hybrid: Mentions + RAG if mentions are few (<= 1) or context is small.
-            // For now, if mentions exist, rely heavily on them.
-            else if (window.VectorStore) {
-                // Classic RAG
+            // C. RAG search (only if no active note and no mentions)
+            else if (!activeNoteId && window.VectorStore) {
                 const results = await VectorStore.search(message, 3);
-                usedNotes = await Promise.all(results.map(r => NoteDAO.get(r.noteId)));
-                context = usedNotes.map(n => `[Note: ${n.title}]\n${n.body}`).join('\n\n---\n\n');
+                const fetchedNotes = await Promise.all(results.map(r => NoteDAO.get(r.noteId)));
+                const ragNotes = fetchedNotes.filter(n => n);
+                if (ragNotes.length > 0) {
+                    usedNotes = ragNotes;
+                    context = ragNotes.map(n => `[Note: ${n.title}]\n${n.body}`).join('\n\n---\n\n');
+                }
             }
 
-            // 2. Construct System Prompt
-            const systemPrompt = `You are a helpful assistant for a note-taking app.
-            
-            CONTEXT:
-            ${context || "No relevant notes found."}
+            const systemPrompt = `You are a helpful AI assistant integrated into a note-taking app called SmartNotes.
 
-            INSTRUCTIONS:
-            - Answer the user's question based on the Context provided above.
-            - If the answer is in the Context, cite the note title (e.g., "According to [Meeting Notes]...").
-            - If the context is empty or irrelevant, you may use your general knowledge but clearly state that it's not from their notes.
-            - Format your answer with Markdown.
-            `;
+${activeNoteId && context ? `The user is CURRENTLY VIEWING a note. Here is the note content they are looking at:
 
-            // 3. Call AI
-            // We maintain a sliding window of history? Or just append?
-            // Simple History: Last 5 turns
+${context}
+
+When the user asks questions like "what is this about", "summarize this", "explain this", etc., they are referring to the note content above.` : context ? `Here are relevant notes from the user's knowledge base:
+
+${context}` : 'No notes are currently open and no relevant notes were found.'}
+
+INSTRUCTIONS:
+- ALWAYS answer based on the note content provided above.
+- If the user asks "what is this about" or similar, summarize the note they are viewing.
+- Cite note titles when referencing information (e.g., "According to [Note Title]...").
+- Use Markdown formatting in your responses.
+- If no context is provided, let the user know they should open a note or use @ to mention one.`;
+
             const messages = [
                 { role: 'system', content: systemPrompt },
-                ...this.history.slice(-4), // Last 4 interactions
+                ...this.history.slice(-10), // Last 10 messages for better context
                 { role: 'user', content: message }
             ];
 
             const responseText = await AIService.chat(messages);
 
-            // 4. Update History
+            // Update history
             this.history.push({ role: 'user', content: message });
             this.history.push({ role: 'assistant', content: responseText });
 
-            // UI: Update AI Message
-            this.updateMessage(thinkingId, responseText);
+            // Save AI response to DB
+            await ChatMessageDAO.save({
+                conversationId: this.activeConversationId,
+                role: 'assistant',
+                content: responseText
+            });
 
-            // Clear temporary mentions
+            // UI: Update AI Message
+            this.updateMessageInUI(messagesId, thinkingId, responseText);
             this.mentionedNotes.clear();
 
         } catch (e) {
             console.error(e);
-            this.updateMessage(thinkingId, "Error: " + e.message);
+            this.updateMessageInUI(messagesId, thinkingId, "Error: " + e.message);
         }
     },
 
-    addMessage(role, text, isThinking = false) {
-        const container = document.getElementById('chat-messages');
+    addMessageToUI(containerId, role, text, isThinking = false) {
+        const container = document.getElementById(containerId);
         const div = document.createElement('div');
-        const id = Date.now().toString();
+        const id = 'msg-' + Date.now().toString();
         div.id = id;
-        div.className = "flex gap-3 " + (role === 'user' ? "flex-row-reverse" : "");
-
-        const avatar = role === 'user'
-            ? `<div class="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center flex-shrink-0 text-white shadow-sm"><span class="material-symbols-outlined text-sm">person</span></div>`
-            : `<div class="w-8 h-8 rounded-full bg-emerald-500 flex items-center justify-center flex-shrink-0 text-white shadow-sm"><span class="material-symbols-outlined text-sm">smart_toy</span></div>`;
-
-        const bubbleClass = role === 'user'
-            ? "bg-blue-600 text-white rounded-2xl rounded-tr-none px-4 py-2.5 text-sm max-w-[85%] shadow-sm prose prose-invert prose-p:my-1 prose-ul:my-1"
-            : "bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-gray-800 dark:text-gray-200 max-w-[85%] shadow-sm prose dark:prose-invert prose-p:my-1 prose-ul:my-1 prose-headings:text-gray-900 dark:prose-headings:text-gray-100";
-
-        div.innerHTML = `
-            ${avatar}
-            <div class="${bubbleClass} ${isThinking ? 'animate-pulse' : ''}">${isThinking ? text : marked.parse(text)}</div>
-        `;
-
-        container.appendChild(div);
-        this.scrollToBottom();
+        div.innerHTML = this.createMessageHTML(role, text, isThinking);
+        div.innerHTML = div.firstElementChild.outerHTML; // Flatten
+        div.firstElementChild.id = id;
+        container.appendChild(div.firstElementChild);
+        container.scrollTop = container.scrollHeight;
         return id;
     },
 
-    updateMessage(id, text) {
+    updateMessageInUI(containerId, id, text) {
         const div = document.getElementById(id);
         if (!div) return;
         const bubble = div.querySelector('div:last-child');
         bubble.classList.remove('animate-pulse');
         bubble.innerHTML = marked.parse(text);
-        this.scrollToBottom();
+        document.getElementById(containerId).scrollTop = document.getElementById(containerId).scrollHeight;
     },
 
-    scrollToBottom() {
-        const container = document.getElementById('chat-messages');
+    scrollToBottom(containerId) {
+        const container = document.getElementById(containerId);
         container.scrollTop = container.scrollHeight;
     }
 };
 
-window.toggleChatPane = ChatManager.togglePane; // Expose globally for header button
-window.ChatManager = ChatManager; // Expose for HTML events
-
+window.ChatManager = ChatManager;

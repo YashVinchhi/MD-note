@@ -40,6 +40,18 @@ db.version(4).stores({
     embeddings: 'noteId, updatedAt' // vector is stored as non-indexed property
 });
 
+// Upgrade to v5 - Chat History
+db.version(5).stores({
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
+    settings: 'key',
+    folders: 'id, parentId, name, collapsed',
+    smart_views: 'id, name, query, icon',
+    attachments: 'id, noteId, type, createdAt',
+    embeddings: 'noteId, updatedAt',
+    conversations: 'id, title, createdAt, updatedAt',
+    chat_messages: 'id, conversationId, role, timestamp'
+});
+
 /**
  * Migration from LocalStorage
  * Moves 'distraction_free_notes' to IndexedDB
@@ -169,6 +181,63 @@ const AttachmentDAO = {
     },
     async get(id) {
         return await db.attachments.get(id);
+    }
+};
+
+/**
+ * DAO for Conversations (ChatGPT-style threads)
+ */
+const ConversationDAO = {
+    async getAll() {
+        return await db.conversations.orderBy('updatedAt').reverse().toArray();
+    },
+    async get(id) {
+        return await db.conversations.get(id);
+    },
+    async create(title = 'New Chat') {
+        const id = crypto.randomUUID();
+        const now = Date.now();
+        const conversation = { id, title, createdAt: now, updatedAt: now };
+        await db.conversations.put(conversation);
+        return conversation;
+    },
+    async updateTitle(id, title) {
+        await db.conversations.update(id, { title, updatedAt: Date.now() });
+    },
+    async touch(id) {
+        await db.conversations.update(id, { updatedAt: Date.now() });
+    },
+    async delete(id) {
+        await db.transaction('rw', db.conversations, db.chat_messages, async () => {
+            await db.chat_messages.where('conversationId').equals(id).delete();
+            await db.conversations.delete(id);
+        });
+    }
+};
+
+/**
+ * DAO for Chat Messages
+ */
+const ChatMessageDAO = {
+    async getByConversationId(conversationId) {
+        return await db.chat_messages.where('conversationId').equals(conversationId).sortBy('timestamp');
+    },
+    async save(message) {
+        const id = message.id || crypto.randomUUID();
+        const msg = {
+            id,
+            conversationId: message.conversationId,
+            role: message.role, // 'user' or 'assistant'
+            content: message.content,
+            timestamp: message.timestamp || Date.now()
+        };
+        await db.chat_messages.put(msg);
+        // Update conversation's updatedAt
+        await ConversationDAO.touch(message.conversationId);
+        return msg;
+    },
+    async clearByConversationId(conversationId) {
+        await db.chat_messages.where('conversationId').equals(conversationId).delete();
     }
 };
 
