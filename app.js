@@ -8,13 +8,29 @@ let notes = []; // Local cache of notes for rendering
 let activeNoteId = null;
 let isPreviewMode = false;
 
+const script = document.createElement('script');
+script.src = 'vector-store.js';
+document.head.appendChild(script);
+
 // --- Core Functions ---
 
 // Load all notes from DB and render
 async function refreshNotes(filter = 'all', searchQuery = '') {
     try {
         if (searchQuery) {
-            notes = await NoteDAO.search(searchQuery);
+            // Check for Semantic Search Toggle
+            const isSemantic = document.getElementById('semantic-search-toggle')?.checked;
+
+            if (isSemantic && window.VectorStore) {
+                // RAG Search
+                const results = await VectorStore.search(searchQuery, 10);
+                const ids = results.map(r => r.noteId);
+                // Preserve order of relevance
+                notes = await Promise.all(ids.map(id => NoteDAO.get(id)));
+                notes = notes.filter(n => n); // Remove nulls
+            } else {
+                notes = await NoteDAO.search(searchQuery);
+            }
         } else {
             notes = await NoteDAO.getAll();
         }
@@ -54,6 +70,13 @@ async function saveCurrentNote() {
         if (document.getElementById('graph-container') && !document.getElementById('graph-container').classList.contains('hidden')) {
             if (window.renderGraph) renderGraph('graph-container');
         }
+
+        // Auto-Index for Vector Search (Debounced? app.js save is already debounced)
+        if (window.VectorStore) {
+            // No await, let it run in background
+            VectorStore.indexNote(note).catch(console.error);
+        }
+
     } catch (err) {
         console.error('Save failed:', err);
     }
@@ -356,14 +379,14 @@ window.togglePane = (pane) => {
     }
 };
 
-window.togglePreviewMode = () => {
+window.togglePreviewMode = async () => {
     isPreviewMode = !isPreviewMode;
     const editor = document.getElementById('note-body');
     const preview = document.getElementById('note-preview');
     const btnText = document.getElementById('preview-btn-text');
 
     if (isPreviewMode) {
-        renderMarkdownPreview();
+        await renderMarkdownPreview(); // Wait for render (async due to DB calls)
         editor.classList.add('hidden');
         preview.classList.remove('hidden');
         btnText.innerText = 'Edit';
@@ -645,10 +668,217 @@ if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').match
     document.documentElement.classList.add('dark');
 }
 
+// --- Advanced Org Logic ---
+
+let folders = [];
+let smartViews = [];
+let activeFolderId = null; // Filter state
+
+async function refreshFolders() {
+    folders = await FolderDAO.getAll();
+    renderFolderTree();
+    updateFolderSelect();
+}
+
+async function refreshSmartViews() {
+    smartViews = await SmartViewDAO.getAll();
+    renderSmartViews();
+}
+
+// Render Folder Tree (Recursive)
+function renderFolderTree() {
+    const container = document.getElementById('folder-tree');
+    if (!container) return; // Guard
+
+    if (folders.length === 0) {
+        container.innerHTML = '<div class="p-4 text-center text-xs text-gray-400 italic">No folders</div>';
+        return;
+    }
+
+    const buildTree = (parentId) => {
+        return folders
+            .filter(f => f.parentId === parentId)
+            .map(f => {
+                const isActive = activeFolderId === f.id;
+                return `
+                <div class="pl-2">
+                    <div onclick="filterByFolder('${f.id}')" 
+                        class="folder-item ${isActive ? 'active' : ''}">
+                        <span class="material-symbols-outlined text-[18px]">${isActive ? 'folder_open' : 'folder'}</span>
+                        <span class="truncate">${f.name}</span>
+                        ${isActive ? '<span class="ml-auto material-symbols-outlined text-[14px] cursor-pointer hover:text-red-500" onclick="deleteFolder(event, \'' + f.id + '\')">delete</span>' : ''}
+                    </div>
+                    ${buildTree(f.id)}
+                </div>
+                `;
+            }).join('');
+    };
+
+    container.innerHTML = buildTree(null);
+}
+
+function renderSmartViews() {
+    const container = document.getElementById('smart-views-list');
+    if (!container) return;
+
+    container.innerHTML = smartViews.map(v => `
+        <div onclick="applySmartView('${v.id}')" class="smart-view-item">
+            <span class="material-symbols-outlined text-[18px] text-purple-400">${v.icon || 'filter_list'}</span>
+            <span class="truncate">${v.name}</span>
+             <span class="ml-auto material-symbols-outlined text-[14px] opacity-0 hover:opacity-100 cursor-pointer hover:text-red-500" onclick="deleteSmartView(event, '${v.id}')">close</span>
+        </div>
+    `).join('');
+}
+
+function updateFolderSelect() {
+    const select = document.getElementById('note-folder-select');
+    if (!select) return;
+
+    const currentVal = select.value;
+    // Keep "No Folder" option
+    let html = '<option value="">No Folder</option>';
+
+    // Flatten for select
+    folders.forEach(f => {
+        html += `<option value="${f.id}">${f.name}</option>`;
+    });
+
+    select.innerHTML = html;
+
+    // Restore selection if curr active note needs it
+    if (activeNoteId) {
+        const note = notes.find(n => n.id === activeNoteId);
+        if (note && note.folderId) select.value = note.folderId;
+    }
+}
+
+// Actions
+window.createNewFolder = async () => {
+    const name = prompt("Folder Name:");
+    if (name) {
+        await FolderDAO.create(name);
+        refreshFolders();
+    }
+};
+
+window.deleteFolder = async (e, id) => {
+    e.stopPropagation();
+    if (confirm("Delete folder? Notes will move to root.")) {
+        await FolderDAO.delete(id);
+        refreshFolders();
+        // If we were filtering by this folder, reset
+        if (activeFolderId === id) filterByFolder(null);
+    }
+};
+
+window.createSmartView = async () => {
+    const query = document.getElementById('search-input').value;
+    if (!query) return alert("Type a search query first!");
+
+    const name = prompt("Name for this view:", query);
+    if (name) {
+        await SmartViewDAO.create(name, query);
+        refreshSmartViews();
+    }
+};
+
+window.deleteSmartView = async (e, id) => {
+    e.stopPropagation();
+    if (confirm("Delete view?")) {
+        await SmartViewDAO.delete(id);
+        refreshSmartViews();
+    }
+};
+
+window.filterByFolder = (id) => {
+    activeFolderId = id;
+    renderNoteList(); // Re-render list with filter
+    renderFolderTree(); // Re-render tree to show active state
+};
+
+window.applySmartView = (id) => {
+    const view = smartViews.find(v => v.id === id);
+    if (view) {
+        document.getElementById('search-input').value = view.query;
+        // Trigger search
+        refreshNotes('all', view.query);
+    }
+};
+
+window.moveCurrentNote = async (folderId) => {
+    if (!activeNoteId) return;
+    const note = notes.find(n => n.id === activeNoteId);
+    note.folderId = folderId || null; // Handle empty string
+    await saveCurrentNote();
+    // Refresh list if we are currently filtering by folder
+    if (activeFolderId && activeFolderId !== note.folderId) {
+        renderNoteList();
+    }
+};
+
+
+// Overriding renderNoteList to include folder filter
+const originalRenderNoteList = renderNoteList;
+
+renderNoteList = (filter = 'all', searchQuery = '') => {
+    // If searching, ignore folder filter usually? Or combine?
+    // Let's combine: explicit folder select narrows scope.
+
+    const container = document.getElementById('notes-container');
+    const searchVal = searchQuery || document.getElementById('search-input').value.toLowerCase();
+
+    let filteredNotes = notes.filter(n => {
+        // 1. Folder matches?
+        if (activeFolderId && n.folderId !== activeFolderId) return false;
+
+        // 2. Search matches?
+        const matchesSearch = !searchVal ||
+            (n.title && n.title.toLowerCase().includes(searchVal)) ||
+            (n.body && n.body.toLowerCase().includes(searchVal)) ||
+            (n.tags && n.tags.some(t => t.toLowerCase().includes(searchVal))); // Added tag search support explicitly
+
+        return matchesSearch;
+    });
+
+    if (filter === 'pinned') {
+        filteredNotes = filteredNotes.filter(n => n.pinned);
+    }
+
+    document.getElementById('total-count').innerText = filteredNotes.length;
+
+    container.innerHTML = filteredNotes.map(note => `
+        <div onclick="setActiveNote('${note.id}')" class="group relative p-4 mb-2 rounded-xl border transition-all cursor-pointer ${note.id === activeNoteId ? 'bg-white dark:bg-gray-800 shadow-sm border-blue-500 border-l-4' : 'hover:bg-white dark:hover:bg-gray-800 border-transparent hover:border-gray-200 dark:hover:border-gray-700'}">
+            <div class="flex justify-between items-start mb-1">
+                <h3 class="font-semibold text-gray-900 dark:text-gray-100 line-clamp-1 ${note.id === activeNoteId ? 'text-blue-600 dark:text-blue-400' : ''}">${note.title || 'Untitled'}</h3>
+                ${note.pinned ? '<span class="material-symbols-outlined text-[14px] text-blue-500">push_pin</span>' : ''}
+            </div>
+            <p class="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-3 h-10 overflow-hidden text-ellipsis">${(note.body || '').substring(0, 100).replace(/[#*`]/g, '') || 'No content...'}</p>
+            <div class="flex items-center gap-2 overflow-hidden flex-wrap">
+                 <!-- Nested Tag Rendering -->
+                ${(note.tags || []).map(tag => {
+        // Check if nested (contains /)
+        if (tag.includes('/')) {
+            const parts = tag.split('/');
+            return `<span class="px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-medium border border-gray-200 dark:border-gray-600 whitespace-nowrap flex items-center gap-0.5">
+                            <span class="opacity-50">${parts[0]}/</span><span>${parts.slice(1).join('/')}</span>
+                        </span>`;
+        }
+        return `<span class="px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-medium border border-gray-200 dark:border-gray-600 whitespace-nowrap">#${tag}</span>`;
+    }).join('')}
+            </div>
+        </div>
+    `).join('');
+};
+
+
 // Initial Load
 // We listen for 'db-ready' event from db.js or just call refresh
 window.addEventListener('db-ready', () => {
-    refreshNotes().then(() => {
+    Promise.all([
+        refreshNotes(),
+        refreshFolders(),
+        refreshSmartViews()
+    ]).then(() => {
         if (notes.length > 0) setActiveNote(notes[0].id);
     });
 
@@ -659,3 +889,440 @@ window.addEventListener('db-ready', () => {
         }
     }).catch(console.warn);
 });
+
+// --- Editor Power-Ups ---
+
+// 1. Drag & Drop Images
+const editorBody = document.getElementById('note-body');
+
+editorBody.addEventListener('paste', async (e) => {
+    const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+    for (const item of items) {
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+            e.preventDefault();
+            const blob = item.getAsFile();
+            await handleImageUpload(blob);
+        }
+    }
+});
+
+editorBody.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    editorBody.classList.add('bg-blue-50', 'dark:bg-blue-900/10');
+});
+
+editorBody.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    editorBody.classList.remove('bg-blue-50', 'dark:bg-blue-900/10');
+});
+
+editorBody.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    editorBody.classList.remove('bg-blue-50', 'dark:bg-blue-900/10');
+
+    if (e.dataTransfer.items) {
+        for (const item of e.dataTransfer.items) {
+            if (item.kind === 'file' && item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                await handleImageUpload(file);
+            }
+        }
+    }
+});
+
+async function handleImageUpload(blob) {
+    if (!activeNoteId) return alert("Select a note first!");
+
+    try {
+        updateSyncStatus("Uploading image...", false);
+        const id = await AttachmentDAO.save(blob, activeNoteId);
+
+        // Insert markdown at cursor
+        const cursorPos = editorBody.selectionStart;
+        const textBefore = editorBody.value.substring(0, cursorPos);
+        const textAfter = editorBody.value.substring(cursorPos);
+
+        const imageMarkdown = `\n![Image](attachment:${id})\n`;
+
+        editorBody.value = textBefore + imageMarkdown + textAfter;
+
+        // Trigger save
+        const event = new Event('input');
+        editorBody.dispatchEvent(event);
+
+        updateSyncStatus("Image attached!");
+    } catch (e) {
+        console.error("Upload failed", e);
+        updateSyncStatus("Image upload failed", true);
+    }
+}
+
+// 2. Async Markdown Rendering (Images + Checklists)
+async function renderMarkdownPreview() {
+    const content = document.getElementById('note-body').value;
+    const preview = document.getElementById('note-preview');
+
+    // Custom Renderer for Checklists
+    const renderer = new marked.Renderer();
+
+    // Checkbox Renderer
+    renderer.listitem = (item) => {
+        // Marked v12+ passes an object {type, raw, text, task, checked, loose}
+        // Older versions might pass (text, task, checked)
+        // We handle both for safety or just target v12+ as per CDN.
+
+        let text, task, checked;
+
+        if (typeof item === 'object' && item !== null && 'text' in item) {
+            text = item.text;
+            task = item.task;
+            checked = item.checked;
+        } else {
+            // Fallback for older signatures if CDN resolves to old version (unlikely with just .min.js but safe)
+            text = arguments[0];
+            task = arguments[1];
+            checked = arguments[2];
+        }
+
+        if (task) {
+            // Add data-index attributes could be tricky since 'text' is processed html
+            // We'll use a simple regex approach on the *source* text for toggling, 
+            // but for rendering we just make them clickable
+            return `<li style="list-style: none;">
+                <label class="flex items-start gap-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 p-1 -ml-2 rounded">
+                    <input type="checkbox" ${checked ? 'checked' : ''} 
+                        class="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 task-checkbox">
+                    <span>${text}</span>
+                </label>
+            </li>`;
+        }
+        return `<li>${text}</li>`;
+    };
+
+    // Parse Markdown with custom renderer
+    let html = marked.parse(content, { renderer });
+
+    // Handle Attachments (Async Replacement)
+    // We use a regex to find src="attachment:UUID" and replace with Blob URLs
+    // This is temporary URL lifecycle management (revoking is important in prod)
+    const attachmentRegex = /src="attachment:([^"]+)"/g;
+    let match;
+    const replacements = [];
+
+    while ((match = attachmentRegex.exec(html)) !== null) {
+        const fullMatch = match[0];
+        const id = match[1];
+        replacements.push({ fullMatch, id });
+    }
+
+    // Fetch blobs and create URLs
+    for (const item of replacements) {
+        const record = await AttachmentDAO.get(item.id);
+        if (record && record.blob) {
+            const url = URL.createObjectURL(record.blob);
+            html = html.replace(item.fullMatch, `src="${url}" class="max-w-full rounded-lg shadow-sm my-2"`);
+        } else {
+            html = html.replace(item.fullMatch, `src="" alt="Image not found"`);
+        }
+    }
+
+    preview.innerHTML = html;
+
+    // init mermaid if needed
+    if (window.mermaid) {
+        // ... existing mermaid logic (copy-pasted or simplified)
+        // Simplified re-run for this block
+        setTimeout(() => {
+            const mermaidBlocks = preview.querySelectorAll('code.language-mermaid');
+            mermaidBlocks.forEach(block => {
+                const div = document.createElement('div');
+                div.className = 'mermaid';
+                div.textContent = block.textContent;
+                block.parentElement.replaceWith(div);
+            });
+            mermaid.run({ nodes: preview.querySelectorAll('.mermaid') });
+        }, 0);
+    }
+
+    // Render Math (KaTeX)
+    if (window.renderMathInElement) {
+        renderMathInElement(preview, {
+            delimiters: [
+                { left: '$$', right: '$$', display: true },
+                { left: '$', right: '$', display: false },
+                { left: '\\(', right: '\\)', display: false },
+                { left: '\\[', right: '\\]', display: true }
+            ],
+            throwOnError: false
+        });
+    }
+}
+
+// --- Data Management (Import/Export) ---
+
+async function exportData() {
+    try {
+        updateSyncStatus("Exporting data...", false);
+        const data = {
+            version: 1,
+            timestamp: Date.now(),
+            notes: await db.notes.toArray(),
+            folders: await db.folders.toArray(),
+            smartViews: await db.smart_views.toArray(),
+            // We usually don't export embeddings/vectors as they can be regenerated and are large
+            // But we SHOULD export attachments
+            attachments: await db.attachments.toArray()
+        };
+
+        const blob = new Blob([JSON.stringify(data)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `smartnotes_backup_${new Date().toISOString().slice(0, 10)}.json`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+        updateSyncStatus("Export complete!");
+    } catch (e) {
+        console.error("Export failed:", e);
+        alert("Export failed: " + e.message);
+    }
+}
+
+async function importData() {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json';
+    input.onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (!confirm("This will overwrite/merge with your current data. It's recommended to export a backup first. Continue?")) return;
+
+        try {
+            updateSyncStatus("Importing data...", false);
+            const text = await file.text();
+            const data = JSON.parse(text);
+
+            await db.transaction('rw', db.notes, db.folders, db.smart_views, db.attachments, async () => {
+                if (data.notes) await db.notes.bulkPut(data.notes);
+                if (data.folders) await db.folders.bulkPut(data.folders);
+                if (data.smartViews) await db.smart_views.bulkPut(data.smartViews);
+                if (data.attachments) await db.attachments.bulkPut(data.attachments);
+            });
+
+            updateSyncStatus("Import complete!");
+            window.location.reload(); // Reload to reflect changes
+        } catch (err) {
+            console.error("Import failed:", err);
+            alert("Import failed: " + err.message);
+        }
+    };
+    input.click();
+}
+
+function openSettings() {
+    // Simple alert-based menu for now, or we can make a modal.
+    // Given the request, let's make a simple modal or just trigger actions.
+    // Let's create a dynamic modal for better UX.
+
+    // Check if modal exists
+    let modal = document.getElementById('settings-modal');
+    if (modal) {
+        modal.classList.remove('hidden');
+        return;
+    }
+
+    // Create Modal
+    modal = document.createElement('div');
+    modal.id = 'settings-modal';
+    modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div class="p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
+                <h3 class="font-bold text-lg">Settings</h3>
+                <button onclick="document.getElementById('settings-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
+                    <span class="material-symbols-outlined">close</span>
+                </button>
+            </div>
+            <div class="p-6 space-y-6">
+                
+                <!-- Data Management -->
+                <div>
+                    <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Data Management</h4>
+                    <div class="space-y-2">
+                        <button onclick="exportData()" class="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors text-left">
+                            <span class="material-symbols-outlined text-blue-500">download</span>
+                            <div>
+                                <div class="font-medium">Export Backup</div>
+                                <div class="text-xs text-gray-500">Save all notes and attachments to JSON</div>
+                            </div>
+                        </button>
+                        <button onclick="importData()" class="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors text-left">
+                            <span class="material-symbols-outlined text-green-500">upload</span>
+                            <div>
+                                <div class="font-medium">Import Backup</div>
+                                <div class="text-xs text-gray-500">Restore from a JSON file</div>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- About -->
+                 <div>
+                    <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">About</h4>
+                    <p class="text-sm text-gray-600 dark:text-gray-400">
+                        SmartNotes Local v1.0<br>
+                        Data is stored locally in your browser (IndexedDB).
+                    </p>
+                </div>
+
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+}
+
+
+// 3. Interactive Checkboxes Handler
+document.getElementById('note-preview').addEventListener('change', (e) => {
+    if (e.target.classList.contains('task-checkbox')) {
+        const checkboxes = document.querySelectorAll('#note-preview .task-checkbox');
+        const index = Array.from(checkboxes).indexOf(e.target);
+        if (index !== -1) {
+            toggleCheckboxInSource(index, e.target.checked);
+        }
+    }
+});
+
+function toggleCheckboxInSource(index, isChecked) {
+    const editor = document.getElementById('note-body');
+    const lines = editor.value.split('\n');
+    let taskCount = 0;
+
+    // Find the Nth task in the source
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        const taskMatch = line.match(/^(\s*)- \[[x ]\]/); // match "- [ ]" or "- [x]"
+
+        if (taskMatch) {
+            if (taskCount === index) {
+                // Toggle it
+                const newMark = isChecked ? '[x]' : '[ ]';
+                lines[i] = line.replace(/- \[[x ]\]/, `- ${newMark}`);
+                break;
+            }
+            taskCount++;
+        }
+    }
+
+    editor.value = lines.join('\n');
+
+    // Trigger Save (but don't re-render preview immediately to lose focus/scroll, wait for debounce)
+    const event = new Event('input');
+    editor.dispatchEvent(event);
+}
+
+// --- Chat Interface Logic ---
+
+function toggleChatPane() {
+    const pane = document.getElementById('chat-pane');
+    const editorPane = document.getElementById('editor-pane');
+
+    // Simple toggle for now (hides editor on mobile, maybe splitscreen on desktop)
+    const isHidden = pane.classList.contains('hidden');
+
+    if (isHidden) {
+        pane.classList.remove('hidden');
+        // On mobile we might want to hide others, but flex layout handles desktop
+        // Let's force it to overlay or replace editor? 
+        // Index.html structure: Note List | Editor | Chat
+        // We injected Chat AFTER Editor. So flex row will show all 3 if space permits.
+        // We added chat-pane inside the rightmost flex area? 
+        // Need to check HTML structure carefully. 
+        // We added it as a sibling to navigation/list/editor wrapper? No, inside the flex-1 container?
+        // Let's assume standard behavior: visible next to editor or overlay
+    } else {
+        pane.classList.add('hidden');
+    }
+}
+
+async function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const message = input.value.trim();
+    if (!message) return;
+
+    // UI: Add User Message
+    addChatMessage('user', message);
+    input.value = '';
+
+    // UI: Add Thinking Placeholder
+    const thinkingId = addChatMessage('ai', 'Thinking...', true);
+
+    try {
+        // 1. Retrieve Context (RAG)
+        let context = "";
+        if (window.VectorStore) {
+            updateSyncStatus("Retrieving context...", false);
+            const results = await VectorStore.search(message, 3); // Top 3 matching notes
+            const notes = await Promise.all(results.map(r => NoteDAO.get(r.noteId)));
+
+            context = notes.map(n => `Note Title: ${n.title}\nContent: ${n.body}`).join('\n\n---\n\n');
+        }
+
+        // 2. prompt
+        const systemPrompt = `You are a helpful assistant for a note-taking app. 
+        Answer the user's question using ONLY the context provided below. 
+        If the answer is not in the context, say "I don't have that information in your notes."
+        
+        Context:
+        ${context}`;
+
+        // 3. Chat
+        const response = await AIService.chat([
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: message }
+        ]);
+
+        // UI: Update AI Message
+        updateChatMessage(thinkingId, response.content);
+
+    } catch (e) {
+        console.error(e);
+        updateChatMessage(thinkingId, "Error: Could not connect to AI.");
+    }
+}
+
+function addChatMessage(role, text, isThinking = false) {
+    const container = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    const id = Date.now().toString();
+    div.id = id;
+    div.className = "flex gap-3 " + (role === 'user' ? "flex-row-reverse" : "");
+
+    const avatar = role === 'user'
+        ? `<div class="w-8 h-8 rounded-full bg-gray-200 dark:bg-gray-700 flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-gray-600 dark:text-gray-300 text-sm">person</span></div>`
+        : `<div class="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center flex-shrink-0"><span class="material-symbols-outlined text-blue-600 dark:text-blue-400 text-sm">smart_toy</span></div>`;
+
+    const bubbleClass = role === 'user'
+        ? "bg-blue-600 text-white rounded-2xl rounded-tr-none px-4 py-2 text-sm max-w-[85%]"
+        : "bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-none px-4 py-2 text-sm text-gray-800 dark:text-gray-200 max-w-[85%]";
+
+    div.innerHTML = `
+        ${avatar}
+        <div class="${bubbleClass} ${isThinking ? 'animate-pulse' : ''}">${text}</div>
+    `;
+
+    container.appendChild(div);
+    container.scrollTop = container.scrollHeight;
+    return id;
+}
+
+function updateChatMessage(id, text) {
+    const div = document.getElementById(id);
+    if (!div) return;
+    const bubble = div.querySelector('div:last-child');
+    bubble.classList.remove('animate-pulse');
+    bubble.innerHTML = marked.parse(text); // Support Markdown in chat response
+}

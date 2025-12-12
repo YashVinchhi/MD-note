@@ -317,8 +317,61 @@ main {
         color: black !important;
     }
 
-    .prose a {
-        text-decoration: none;
-        color: black !important;
+    /* Folders & Smart Views */
+    .folder-item,
+    .smart-view-item {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 12px;
+        font-size: 0.875rem;
+        color: #4b5563;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.2s;
+    }
+
+    .dark .folder-item,
+    .dark .smart-view-item {
+        color: #9ca3af;
+    }
+
+    .folder-item:hover,
+    .smart-view-item:hover {
+        background-color: rgba(0, 0, 0, 0.05);
+        color: #1f2937;
+    }
+
+    .dark .folder-item:hover,
+    .dark .smart-view-item:hover {
+        background-color: rgba(255, 255, 255, 0.05);
+        color: #f3f4f6;
+    }
+
+    .folder-item.active,
+    .smart-view-item.active {
+        background-color: #eff6ff;
+        color: #2563eb;
+        font-weight: 500;
+    }
+
+    .dark .folder-item.active,
+    .dark .smart-view-item.active {
+        background-color: rgba(37, 99, 235, 0.2);
+        color: #60a5fa;
+    }
+
+    /* Nested Tags Pills */
+    .tag-pill {
+        /* Base styles are inline in app.js or tailwind classes in HTML */
+    }
+
+    .tag-part {
+        opacity: 0.7;
+    }
+
+    .tag-part:last-child {
+        opacity: 1;
+        font-weight: 600;
     }
 }

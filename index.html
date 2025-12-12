@@ -20,6 +20,11 @@
     <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.css" rel="stylesheet" />
+
+    <!-- KaTeX -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+    <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 </head>
 
 <body
@@ -33,6 +38,7 @@
                 class="flex flex-col h-full border-r border-gray-200 dark:border-gray-800 bg-[var(--nav-bg-light)] dark:bg-[var(--nav-bg-dark)]">
                 <!-- Top Section -->
                 <div class="flex flex-col gap-2 p-4 flex-1">
+                    <!-- User Profile -->
                     <div
                         class="flex items-center gap-3 p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer transition-colors mb-4">
                         <div
@@ -42,23 +48,82 @@
                             <p class="text-sm font-semibold truncate">Yash's Workspace</p>
                         </div>
                     </div>
-                    <div class="space-y-1">
-                        <button onclick="renderNoteList('all')"
-                            class="w-full flex items-center gap-3 px-3 py-2 text-gray-700 dark:text-gray-300 bg-black/5 dark:bg-white/10 rounded-lg font-medium transition-all text-left">
-                            <span class="material-symbols-outlined text-[20px]">home</span>
-                            <span class="text-sm">All Notes</span>
-                            <span id="total-count" class="ml-auto text-xs font-bold text-gray-400">0</span>
+
+                    <!-- Search -->
+                    <div>
+                        <div class="relative">
+                            <span
+                                class="material-symbols-outlined absolute left-3 top-2.5 text-gray-400 text-[18px]">search</span>
+                            <input type="text" id="search-input" placeholder="Search notes..."
+                                class="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-lg py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-blue-500 placeholder-gray-400 dark:text-white">
+                        </div>
+                        <div class="flex items-center gap-2 mt-2 px-1">
+                            <label class="flex items-center gap-1 cursor-pointer">
+                                <input type="checkbox" id="semantic-search-toggle"
+                                    class="rounded text-blue-600 focus:ring-0 w-3 h-3">
+                                <span
+                                    class="text-[10px] text-gray-400 uppercase tracking-wider font-semibold">Semantic</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Navigation Links -->
+                    <nav class="space-y-1">
+                        <button
+                            onclick="refreshNotes('all'); setActiveNote(null); document.getElementById('search-input').value=''"
+                            class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-3">
+                            <span class="material-symbols-outlined text-[20px]">description</span>
+                            All Notes
+                            <span id="total-count" class="ml-auto text-xs text-gray-400 font-mono">0</span>
                         </button>
-                        <button onclick="renderNoteList('pinned')"
-                            class="w-full flex items-center gap-3 px-3 py-2 text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg font-medium transition-all text-left">
-                            <span class="material-symbols-outlined text-[20px]">star</span>
-                            <span class="text-sm">Favorites</span>
+                        <button onclick="toggleChatPane()"
+                            class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-3">
+                            <span class="material-symbols-outlined text-[20px]">smart_toy</span>
+                            Chat with Notes
+                        </button>
+                        <button onclick="refreshNotes('pinned')"
+                            class="w-full text-left px-3 py-2 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 flex items-center gap-3">
+                            <span class="material-symbols-outlined text-[20px]">push_pin</span>
+                            Pinned
                         </button>
                         <button id="graph-view-btn" onclick="toggleGraphView()"
                             class="w-full flex items-center gap-3 px-3 py-2 text-gray-600 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg font-medium transition-all text-left">
                             <span class="material-symbols-outlined text-[20px]">hub</span>
                             <span class="text-sm">Graph View</span>
                         </button>
+                    </nav>
+                </div>
+
+                <!-- Middle Section: Smart Views & Folders -->
+                <div class="flex-1 overflow-y-auto px-4 custom-scrollbar">
+
+                    <!-- Smart Views -->
+                    <div class="mb-6">
+                        <div class="flex items-center justify-between mb-2 px-2">
+                            <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Smart Views</h3>
+                            <button onclick="createSmartView()"
+                                class="text-gray-400 hover:text-blue-500 transition-colors" title="Save current search">
+                                <span class="material-symbols-outlined text-[16px]">add</span>
+                            </button>
+                        </div>
+                        <div id="smart-views-list" class="space-y-0.5">
+                            <!-- Populated by JS -->
+                        </div>
+                    </div>
+
+                    <!-- Folders -->
+                    <div class="mb-4">
+                        <div class="flex items-center justify-between mb-2 px-2">
+                            <h3 class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Folders</h3>
+                            <button onclick="createNewFolder()"
+                                class="text-gray-400 hover:text-blue-500 transition-colors" title="New Folder">
+                                <span class="material-symbols-outlined text-[16px]">create_new_folder</span>
+                            </button>
+                        </div>
+                        <div id="folder-tree" class="space-y-0.5">
+                            <!-- Populated by JS -->
+                            <div class="p-4 text-center text-xs text-gray-400 italic">No folders</div>
+                        </div>
                     </div>
                 </div>
 
@@ -142,6 +207,21 @@
                         title="Toggle List">
                         <span class="material-symbols-outlined text-[20px]">notes</span>
                     </button>
+                    <span class="material-symbols-outlined text-[16px] mx-1 text-gray-300">chevron_right</span>
+
+                    <!-- Folder Breadcrumb/Select -->
+                    <div class="relative flex items-center group max-w-[120px]">
+                        <span class="material-symbols-outlined text-[18px] text-gray-400 mr-1">folder</span>
+                        <select id="note-folder-select" onchange="moveCurrentNote(this.value)"
+                            class="appearance-none bg-transparent border-none py-0 pl-0 pr-6 text-sm font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 focus:ring-0 cursor-pointer w-full truncate text-left">
+                            <option value="">No Folder</option>
+                        </select>
+                        <!-- Custom arrow to replace default -->
+                        <span class="pointer-events-none absolute right-0 flex items-center text-gray-400">
+                            <span class="material-symbols-outlined text-[14px]">expand_more</span>
+                        </span>
+                    </div>
+
                     <span class="material-symbols-outlined text-[16px] mx-1 text-gray-300">chevron_right</span>
                     <span id="header-title" class="font-medium truncate max-w-[200px]">Select a note</span>
                     <div id="sync-status"
@@ -247,8 +327,50 @@
                     class="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-xl py-3 pl-10 pr-4 text-base focus:ring-2 focus:ring-blue-500/50 focus:border-blue-500/50 shadow-2xl transition-all placeholder-gray-500 dark:text-white"
                     placeholder="Type title and press Enter to create..." type="text" />
             </div>
-        </div>
+            <!-- CHAT PANE (Absolute Overlay or Side Panel) -->
+            <div id="chat-pane"
+                class="hidden absolute inset-0 z-20 bg-white dark:bg-gray-900 flex flex-col md:relative md:w-1/3 md:border-l border-gray-200 dark:border-gray-800">
+                <div class="h-14 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between px-4">
+                    <h2 class="font-semibold text-lg flex items-center gap-2">
+                        <span class="material-symbols-outlined text-blue-500">chat_spark</span>
+                        Chat with Notes
+                    </h2>
+                    <button onclick="toggleChatPane()"
+                        class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                        <span class="material-symbols-outlined">close</span>
+                    </button>
+                </div>
 
+                <!-- Messages Area -->
+                <div id="chat-messages" class="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                    <div class="flex gap-3">
+                        <div
+                            class="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900 flex items-center justify-center flex-shrink-0">
+                            <span
+                                class="material-symbols-outlined text-blue-600 dark:text-blue-400 text-sm">smart_toy</span>
+                        </div>
+                        <div
+                            class="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-none px-4 py-2 text-sm text-gray-800 dark:text-gray-200 max-w-[85%]">
+                            Hello! I can answer questions based on your notes. What logic would you like to retrieve?
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Input Area -->
+                <div class="p-4 border-t border-gray-200 dark:border-gray-800">
+                    <div class="relative">
+                        <input type="text" id="chat-input" placeholder="Ask a question..."
+                            class="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl py-3 pl-4 pr-12 text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent dark:text-white"
+                            onkeydown="if(event.key === 'Enter') sendChatMessage()">
+                        <button onclick="sendChatMessage()"
+                            class="absolute right-2 top-2 p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded-lg transition-colors">
+                            <span class="material-symbols-outlined text-[20px]">send</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+        </div>
     </div>
 
     <!-- Application Logic -->

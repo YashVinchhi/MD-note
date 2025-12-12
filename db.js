@@ -9,8 +9,35 @@ const db = new Dexie('SynapseDB');
 // 'id' is our primary key (string UUID from app.js)
 // We index fields we want to query/filter by: tags, pinned, updatedAt
 db.version(1).stores({
-    notes: 'id, title, *tags, date, pinned, updatedAt, summary',
-    settings: 'key' // For storing migration flags
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary', // v1 schema
+    settings: 'key'
+});
+
+// Upgrade to v2
+db.version(2).stores({
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId', // Added folderId
+    settings: 'key',
+    folders: 'id, parentId, name, collapsed',
+    smart_views: 'id, name, query, icon'
+});
+
+// Upgrade to v3
+db.version(3).stores({
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
+    settings: 'key',
+    folders: 'id, parentId, name, collapsed',
+    smart_views: 'id, name, query, icon',
+    attachments: 'id, noteId, type, createdAt'
+});
+
+// Upgrade to v4
+db.version(4).stores({
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
+    settings: 'key',
+    folders: 'id, parentId, name, collapsed',
+    smart_views: 'id, name, query, icon',
+    attachments: 'id, noteId, type, createdAt',
+    embeddings: 'noteId, updatedAt' // vector is stored as non-indexed property
 });
 
 /**
@@ -73,22 +100,12 @@ const NoteDAO = {
     async get(id) {
         return await db.notes.get(id);
     },
-
     async save(note) {
-        // Ensure id exists
-        if (!note.id) note.id = Date.now().toString();
-        note.updatedAt = Date.now();
-        // Extract wiki links (placeholder for now, will implement logic in app.js/service)
-        note.wikiLinks = note.wikiLinks || [];
-
-        await db.notes.put(note);
-        return note;
+        return await db.notes.put(note);
     },
-
     async delete(id) {
-        await db.notes.delete(id);
+        return await db.notes.delete(id);
     },
-
     async search(query) {
         if (!query) return this.getAll();
         const lowerQuery = query.toLowerCase();
@@ -102,6 +119,56 @@ const NoteDAO = {
                 (note.body && note.body.toLowerCase().includes(lowerQuery)) ||
                 (note.tags && note.tags.some(t => t.toLowerCase().includes(lowerQuery)));
         }).toArray();
+    }
+};
+
+const FolderDAO = {
+    async getAll() {
+        return await db.folders.toArray();
+    },
+    async create(name, parentId = null) {
+        const folder = { id: Date.now().toString(), name, parentId, collapsed: false };
+        await db.folders.put(folder);
+        return folder;
+    },
+    async delete(id) {
+        // Simple delete (orphans notes? or moves to root? forcing root for now)
+        // Ideally should update all notes with this folderId to null
+        await db.transaction('rw', db.notes, db.folders, async () => {
+            await db.notes.where('folderId').equals(id).modify({ folderId: null });
+            await db.folders.delete(id);
+        });
+    }
+};
+
+const SmartViewDAO = {
+    async getAll() {
+        return await db.smart_views.toArray();
+    },
+    async create(name, query, icon = 'filter_list') {
+        const view = { id: Date.now().toString(), name, query, icon };
+        await db.smart_views.put(view);
+        return view;
+    },
+    async delete(id) {
+        await db.smart_views.delete(id);
+    }
+};
+
+const AttachmentDAO = {
+    async save(blob, noteId) {
+        const id = crypto.randomUUID();
+        await db.attachments.put({
+            id,
+            noteId,
+            blob,
+            type: blob.type,
+            createdAt: Date.now()
+        });
+        return id;
+    },
+    async get(id) {
+        return await db.attachments.get(id);
     }
 };
 

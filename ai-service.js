@@ -133,6 +133,73 @@ const AIService = {
         }
     },
 
+    // --- RAG & Embeddings ---
+
+    async generateEmbedding(text) {
+        // The original code does not have `this.init()` or `this.baseUrl`.
+        // Assuming `this.endpoint` is the base URL for Ollama API calls.
+        // And `this.model` is already set or will be used as a fallback.
+
+        let embeddingModel = 'nomic-embed-text';
+
+        try {
+            const response = await fetch(`${this.endpoint.replace('/api/generate', '')}/api/embeddings`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: embeddingModel,
+                    prompt: text
+                })
+            });
+
+            if (!response.ok) {
+                // Fallback to active chat model (might work for some models like llama3)
+                console.warn(`Embedding failed with ${embeddingModel}, trying ${this.model}`);
+                const response2 = await fetch(`${this.endpoint.replace('/api/generate', '')}/api/embeddings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: this.model,
+                        prompt: text
+                    })
+                });
+                if (!response2.ok) throw new Error('Failed to generate embedding');
+                const data2 = await response2.json();
+                return data2.embedding;
+            }
+
+            const data = await response.json();
+            return data.embedding;
+        } catch (e) {
+            console.error("Embedding Error:", e);
+            throw e;
+        }
+    },
+
+    async chat(messages) {
+        // The original code does not have `this.init()` or `this.baseUrl`.
+        // Assuming `this.endpoint` is the base URL for Ollama API calls.
+
+        try {
+            const response = await fetch(`${this.endpoint.replace('/api/generate', '')}/api/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model: this.model,
+                    messages: messages,
+                    stream: false // For now, no streaming to simplify UI
+                })
+            });
+
+            if (!response.ok) throw new Error('Chat failed');
+            const data = await response.json();
+            return data.message; // { role: 'assistant', content: '...' }
+        } catch (e) {
+            console.error("Chat Error:", e);
+            throw e;
+        }
+    },
+
     /**
      * Internal helper to call Ollama
      */
