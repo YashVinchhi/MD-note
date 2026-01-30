@@ -1,15 +1,70 @@
+#!/usr/bin/env python3
+"""
+SmartNotes Advanced Server
+Features:
+- Concurrent request handling (Threaded)
+- Interactive Numbered TUI
+- Live Logs in separate window
+"""
+
+import http.server
+import socketserver
+import os
+import threading
+import time
+import sys
+import webbrowser
+import logging
+import argparse
+import urllib.request
+import urllib.error
+import json
+
 try:
     import pystray
     from PIL import Image, ImageDraw
 except ImportError:
     pystray = None
+    Image = None
+    ImageDraw = None
+
+# Add optional colored ASCII header support (pyfiglet + rich)
+try:
+    import pyfiglet
+except Exception:
+    pyfiglet = None
+
+try:
+    from rich.console import Console
+    from rich.markup import escape as rich_escape
+except Exception:
+    Console = None
+    rich_escape = None
+
+
+PORT = 50001
+CONTROL_PORT = 50002
+SERVER_THREAD = None
+HTTPD = None
+IS_RUNNING = False
+LOG_FILE = "server.log"
+SELECTED_MODEL = "llama2:7b" # Default model
+CONFIG_FILE = 'server_config.json'
+
+# Setup Logging
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
 
 def create_image():
     # Load favicon.ico for tray icon
     try:
+        if Image is None:
+            raise RuntimeError('PIL not available')
         return Image.open(os.path.join(os.path.dirname(__file__), 'favicon.ico'))
     except Exception as e:
         print(f"Failed to load favicon.ico: {e}. Using default icon.")
+        # If PIL isn't available, return None and pystray will handle or skip
+        if Image is None or ImageDraw is None:
+            return None
         img = Image.new('RGB', (64, 64), color=(255, 255, 255))
         d = ImageDraw.Draw(img)
         d.ellipse((16, 16, 48, 48), fill=(59, 130, 246))
@@ -77,39 +132,6 @@ def unload_model(model_name=None):
     except Exception as e:
         print(f"Error unloading model: {e}")
         logging.error(f"Error unloading model: {e}")
-#!/usr/bin/env python3
-"""
-SmartNotes Advanced Server
-Features:
-- Concurrent request handling (Threaded)
-- Interactive Numbered TUI
-- Live Logs in separate window
-"""
-
-import http.server
-import socketserver
-import os
-import threading
-import time
-import sys
-import webbrowser
-import logging
-
-PORT = 50001
-SERVER_THREAD = None
-HTTPD = None
-IS_RUNNING = False
-LOG_FILE = "server.log"
-SELECTED_MODEL = "llama2:7b" # Default model
-
-# Setup Logging
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format='%(asctime)s - %(message)s', datefmt='%H:%M:%S')
-
-import urllib.request
-import urllib.error
-import json
-
-# ... (Logging setup remains)
 
 class CORSRequestHandler(http.server.SimpleHTTPRequestHandler):
     """HTTP Request Handler with CORS, Logging, and Ollama Proxy"""
@@ -201,25 +223,46 @@ def get_ollama_models():
         print(f"Error fetching models: {e}")
         return []
 
+def load_config():
+    global SELECTED_MODEL
+    try:
+        if os.path.exists(CONFIG_FILE):
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                cfg = json.load(f)
+            SELECTED_MODEL = cfg.get('selected_model', SELECTED_MODEL)
+            logging.info(f"Loaded config: selected_model={SELECTED_MODEL}")
+    except Exception as e:
+        logging.warning(f"Failed to load config: {e}")
+
+def save_config():
+    try:
+        cfg = {'selected_model': SELECTED_MODEL}
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            json.dump(cfg, f)
+        logging.info(f"Saved config: selected_model={SELECTED_MODEL}")
+    except Exception as e:
+        logging.error(f"Failed to save config: {e}")
+
 def select_model_menu():
     global SELECTED_MODEL
-    print("\\nfetching models...", end="", flush=True)
+    print("\n fetching models...", end="", flush=True)
     models = get_ollama_models()
     if not models:
         print(" Failed. Is Ollama running?")
         return
 
-    print(" Done.\\n")
+    print(" Done.\n")
     print("Available Models:")
     for i, model in enumerate(models):
         prefix = "-> " if model == SELECTED_MODEL else "   "
         print(f"{prefix}{i+1}. {model}")
 
     try:
-        choice = input(f"\\nSelect Model (1-{len(models)}): ")
+        choice = input(f"\nSelect Model (1-{len(models)}): ")
         idx = int(choice) - 1
         if 0 <= idx < len(models):
             SELECTED_MODEL = models[idx]
+            save_config()
             print(f"✓ Selected Model: {SELECTED_MODEL}")
             logging.info(f"Model changed to {SELECTED_MODEL}")
         else:
@@ -293,10 +336,211 @@ def print_menu():
     print(f"║  9. Unload Model from VRAM           ║")
     print(f"╚══════════════════════════════════════╝")
 
+def start_control_server():
+    """Start a small HTTP control server bound to localhost."""
+    try:
+        server = http.server.ThreadingHTTPServer(('127.0.0.1', CONTROL_PORT), ControlRequestHandler)
+        t = threading.Thread(target=server.serve_forever, daemon=True)
+        t.start()
+        logging.info(f"Control API listening on 127.0.0.1:{CONTROL_PORT}")
+        print(f"Control API available on 127.0.0.1:{CONTROL_PORT}")
+        return server
+    except OSError as e:
+        logging.error(f"Failed to start control API: {e}")
+        print(f"Failed to start control API: {e}")
+        return None
+
+class ControlRequestHandler(http.server.BaseHTTPRequestHandler):
+    """Local-only control API for starting/stopping the server and changing settings.
+    POST /control with JSON { action: 'start'|'stop'|'restart'|'status'|'open_logs'|'open_browser'|'list_models'|'select_model'|'unload_model', model: 'name' }
+    """
+    def _set_json_response(self, code=200):
+        self.send_response(code)
+        self.send_header('Content-Type', 'application/json')
+        self.end_headers()
+
+    def do_GET(self):
+        if self.client_address[0] not in ('127.0.0.1', '::1', 'localhost'):
+            self._set_json_response(403)
+            self.wfile.write(json.dumps({'error': 'Forbidden'}).encode())
+            return
+        if self.path == '/control/status':
+            resp = {
+                'is_running': IS_RUNNING,
+                'port': PORT,
+                'model': SELECTED_MODEL
+            }
+            self._set_json_response(200)
+            self.wfile.write(json.dumps(resp).encode())
+        else:
+            self._set_json_response(404)
+            self.wfile.write(json.dumps({'error': 'Not found'}).encode())
+
+    def do_POST(self):
+        if self.client_address[0] not in ('127.0.0.1', '::1', 'localhost'):
+            self._set_json_response(403)
+            self.wfile.write(json.dumps({'error': 'Forbidden'}).encode())
+            return
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length).decode('utf-8') if content_length > 0 else '{}'
+        try:
+            data = json.loads(body)
+        except Exception:
+            data = {}
+
+        action = data.get('action')
+        try:
+            if action == 'start':
+                start_server()
+                self._set_json_response(200)
+                self.wfile.write(json.dumps({'status': 'started'}).encode())
+            elif action == 'stop':
+                stop_server()
+                self._set_json_response(200)
+                self.wfile.write(json.dumps({'status': 'stopped'}).encode())
+            elif action == 'restart':
+                stop_server()
+                time.sleep(0.3)
+                start_server()
+                self._set_json_response(200)
+                self.wfile.write(json.dumps({'status': 'restarted'}).encode())
+            elif action == 'open_logs':
+                open_logs()
+                self._set_json_response(200)
+                self.wfile.write(json.dumps({'status': 'logs_opened'}).encode())
+            elif action == 'open_browser':
+                webbrowser.open(f'http://localhost:{PORT}')
+                self._set_json_response(200)
+                self.wfile.write(json.dumps({'status': 'browser_opened'}).encode())
+            elif action == 'list_models':
+                models = get_ollama_models()
+                self._set_json_response(200)
+                self.wfile.write(json.dumps({'models': models}).encode())
+            elif action == 'select_model':
+                model = data.get('model')
+                if model:
+                    global SELECTED_MODEL
+                    SELECTED_MODEL = model
+                    save_config()
+                    logging.info(f"Model changed to {SELECTED_MODEL} via control API")
+                    self._set_json_response(200)
+                    self.wfile.write(json.dumps({'status': 'model_selected', 'model': SELECTED_MODEL}).encode())
+                else:
+                    self._set_json_response(400)
+                    self.wfile.write(json.dumps({'error': 'model required'}).encode())
+            elif action == 'unload_model':
+                model = data.get('model')
+                unload_model(model_name=model)
+                self._set_json_response(200)
+                self.wfile.write(json.dumps({'status': 'unload_requested'}).encode())
+            else:
+                self._set_json_response(400)
+                self.wfile.write(json.dumps({'error': 'invalid action'}).encode())
+        except Exception as e:
+            self._set_json_response(500)
+            self.wfile.write(json.dumps({'error': str(e)}).encode())
+
+    def log_message(self, format, *args):
+        # suppress default http logging
+        logging.debug("Control API: %s" % (format % args))
+
+
+def _hex_to_rgb(hex_color: str):
+    hex_color = hex_color.lstrip('#')
+    return tuple(int(hex_color[i:i+2], 16) for i in (0, 2, 4))
+
+
+def _interpolate_color(c1, c2, t: float):
+    return tuple(int(a + (b - a) * t) for a, b in zip(c1, c2))
+
+
+def generate_gradient_hex(colors, steps):
+    """Return a list of `steps` hex colors interpolated across the provided color stops."""
+    if not colors or steps <= 0:
+        return []
+    # Convert to RGB
+    rgbs = [_hex_to_rgb(c) for c in colors]
+    result = []
+    if len(rgbs) == 1:
+        return [colors[0]] * steps
+    segments = len(rgbs) - 1
+    for i in range(steps):
+        # position in [0,1]
+        pos = i / max(steps - 1, 1)
+        seg_f = pos * segments
+        seg = int(min(segments - 1, seg_f))
+        t = seg_f - seg
+        c = _interpolate_color(rgbs[seg], rgbs[seg+1], t)
+        result.append('#' + ''.join(f"{v:02X}" for v in c))
+    return result
+
+
+def print_colored_header(text='MD-NOTES'):
+    """Print a neon-colored FIGlet header using rich if available, otherwise plain ASCII."""
+    header_text = str(text or 'MD-NOTES')
+    # Generate figlet ASCII
+    if pyfiglet:
+        try:
+            fig = pyfiglet.figlet_format(header_text, font='doh')
+        except Exception:
+            try:
+                fig = pyfiglet.figlet_format(header_text)
+            except Exception:
+                fig = header_text + "\n"
+    else:
+        fig = header_text + "\n"
+
+    # If no rich, print plain
+    if not Console:
+        print(fig)
+        return
+
+    console = Console()
+    # Neon palette
+    palette = ['#39FF14', '#00FFD5', '#00B3FF', '#7A00FF', '#FF00D0']
+    # Count characters excluding newlines for gradient distribution
+    chars = [c for c in fig if c != '\n']
+    if not chars:
+        console.print(fig)
+        return
+    gradient = generate_gradient_hex(palette, len(chars))
+
+    # Build markup string by mapping a color to each non-newline character
+    out_parts = []
+    idx = 0
+    for ch in fig:
+        if ch == '\n':
+            out_parts.append('\n')
+        else:
+            color = gradient[idx]
+            # Escape the character for rich markup
+            esc = rich_escape(ch)
+            out_parts.append(f"[{color}]{esc}[/]")
+            idx += 1
+    markup = ''.join(out_parts)
+    try:
+        console.print(markup)
+    except Exception:
+        # fallback to plain print
+        print(fig)
+
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--daemon', action='store_true', help='Run server without interactive menu')
+    args = parser.parse_args()
+
     # Ensure log file exists
     if not os.path.exists(LOG_FILE):
         with open(LOG_FILE, 'w') as f: f.write(f"Server Log Initialized\n")
+
+    # Load persisted config (if any)
+    load_config()
+
+    # Print neon header on startup (optional)
+    try:
+        print_colored_header('MD-NOTES')
+    except Exception:
+        pass
 
     # Start tray icon in a separate thread
     if pystray:
@@ -305,9 +549,26 @@ def main():
     else:
         print("pystray not installed. No tray icon will be shown.")
 
+    # Start control API so the CLI can control the server
+    control_server = start_control_server()
+
     # Auto-start
     start_server()
 
+    if args.daemon:
+        # Run in daemon mode (no interactive menu)
+        try:
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            print('\nShutting down...')
+            if IS_RUNNING:
+                stop_server()
+            if control_server:
+                control_server.shutdown()
+            sys.exit(0)
+
+    # Interactive loop (unchanged behavior)
     while True:
         try:
             print_menu()
@@ -331,6 +592,8 @@ def main():
                 if IS_RUNNING:
                     stop_server()
                 print("Goodbye!")
+                if control_server:
+                    control_server.shutdown()
                 sys.exit(0)
             elif choice == '8':
                 select_model_menu()
@@ -344,6 +607,7 @@ def main():
             print("\nType '7' to exit.")
         except Exception as e:
             print(f"Error: {e}")
+
 
 if __name__ == "__main__":
     main()

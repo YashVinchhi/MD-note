@@ -27,11 +27,19 @@
     <link href="styles.css" rel="stylesheet" />
 
     <!-- Libraries -->
+
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script src="https://unpkg.com/dexie@3.2.4/dist/dexie.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.js"></script>
     <link href="https://cdn.jsdelivr.net/npm/vis-network@9.1.2/dist/vis-network.min.css" rel="stylesheet" />
+
+    <!-- Chart.js for interactive charts -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <!-- Vega-Lite and Vega-Embed for advanced charts -->
+    <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
 
     <!-- KaTeX -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
@@ -66,7 +74,7 @@
                         <div class="relative">
                             <span
                                 class="material-symbols-outlined absolute left-3 top-2.5 text-gray-400 text-[18px]">search</span>
-                            <input type="text" id="search-input" placeholder="Search notes..."
+                            <input type="text" id="nav-search-input" placeholder="Search notes..."
                                 class="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-lg py-2 pl-10 pr-4 text-sm focus:ring-2 focus:ring-blue-500 placeholder-gray-400 dark:text-white">
                         </div>
                         <div class="flex items-center gap-2 mt-2 px-1">
@@ -116,6 +124,11 @@
                             <button onclick="createNewFolder()"
                                 class="text-gray-400 hover:text-blue-500 transition-colors" title="New Folder">
                                 <span class="material-symbols-outlined text-[16px]">create_new_folder</span>
+                            </button>
+                            <button onclick="triggerAIFolderSuggest()" id="ai-folder-btn"
+                                class="ml-2 text-emerald-500 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 p-1 rounded-md transition-colors"
+                                title="AI Suggest Folder">
+                                <span class="material-symbols-outlined text-[16px]">auto_awesome</span>
                             </button>
                         </div>
                         <div id="folder-tree" class="space-y-0.5">
@@ -222,6 +235,11 @@
                     </div>
                 </div>
                 <div class="flex items-center gap-2">
+                    <!-- Digest Button -->
+                    <button id="digest-btn" title="Generate Weekly Digest"
+                        class="p-1.5 bg-gradient-to-br from-emerald-500 to-emerald-600 text-white rounded-lg hover:from-emerald-600 hover:to-emerald-700 transition-colors">
+                        <span class="material-symbols-outlined text-[18px]">insights</span>
+                    </button>
                     <button onclick="exportAllNotes()"
                         class="flex items-center gap-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-colors"
                         title="Export All Notes">
@@ -282,7 +300,7 @@
                         class="w-full bg-transparent border-none p-0 text-4xl font-bold text-[var(--editor-text-light)] dark:text-[var(--editor-text-dark)] placeholder-gray-300 dark:placeholder-gray-700 focus:ring-0 mb-6 leading-tight resize-none overflow-hidden"
                         rows="1" placeholder="Untitled Note"></textarea>
 
-                    <div class="flex items-center flex-wrap gap-4 mb-8 text-sm">
+                    <div class="flex items-center flex-wrap gap-4 mb-8 text-sm" id="editor-toolbar">
                         <div
                             class="flex items-center gap-2 text-[var(--editor-accent-light)] dark:text-[var(--editor-accent-dark)]">
                             <span class="material-symbols-outlined text-[18px]">calendar_today</span>
@@ -310,6 +328,12 @@
                                 title="AI Connect Related">
                                 <span class="material-symbols-outlined text-[18px]">hub</span>
                             </button>
+                            <button id="ai-diagram-btn" type="button"
+                                class="ml-2 px-2 py-1 rounded bg-green-600 text-white text-xs"
+                                title="Generate diagram from selected text">
+                                <span class="material-symbols-outlined align-middle text-[18px] mr-1">auto_awesome</span>
+                                AI Diagram
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -325,8 +349,8 @@
                 </div>
 
                 <div class="h-20"></div>
-            </div>
-    </div>
+            </div> <!-- close editor-scroller -->
+        </main>
 
     <div id="toast"
         class="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-50 transition-all duration-300 opacity-0 translate-y-10 pointer-events-none">
@@ -336,7 +360,6 @@
             <span id="toast-message" class="text-sm font-medium">Note saved</span>
         </div>
     </div>
-    </main>
 
     <div class="omnibar" id="omnibar">
         <div class="relative">
@@ -409,6 +432,7 @@
     <script src="tabs.js"></script>
     <script src="ai-service.js"></script>
     <script src="vector-store.js"></script>
+    <script src="digest.js"></script>
     <!-- Settings Modal -->
     <div id="settings-modal"
         class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -477,6 +501,21 @@
                     class="px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-lg shadow-blue-500/30 transition-all transform hover:-translate-y-0.5">
                     Save Changes
                 </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Digest Modal -->
+    <div id="digest-modal" class="hidden fixed inset-0 z-60 flex items-center justify-center bg-black/40">
+        <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-3xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <div class="px-6 py-4 border-b flex items-center justify-between">
+                <h3 class="text-lg font-semibold text-gray-800 dark:text-white">Weekly Digest</h3>
+                <div class="flex gap-2">
+                    <button id="digest-daily-btn" class="px-3 py-1 rounded bg-gray-100 dark:bg-gray-800">Daily</button>
+                    <button class="digest-close px-3 py-1 rounded bg-gray-100 dark:bg-gray-800">Close</button>
+                </div>
+            </div>
+            <div class="digest-body"> <!-- Content injected by digest.js -->
             </div>
         </div>
     </div>
@@ -552,3 +591,4 @@
 </body>
 
 </html>
+

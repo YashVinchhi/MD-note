@@ -1,3 +1,155 @@
+// === AI-Assisted Diagram Generation ===
+// Handler for AI Diagram button (used for both injected and static button)
+async function handleAIDiagramButtonClick(evt) {
+    const btn = evt.currentTarget;
+    // Try to find the main note textarea (id note-body)
+    const textarea = document.getElementById('note-body') || document.querySelector('textarea');
+    if (!textarea) return alert('No note editor found.');
+    const selStart = textarea.selectionStart, selEnd = textarea.selectionEnd;
+    const selected = textarea.value.substring(selStart, selEnd).trim();
+    if (!selected) return alert('Select some text to generate a diagram.');
+    btn.disabled = true;
+    btn.textContent = 'Generating...';
+    try {
+        // Use AIService to generate diagram from text (default: Mermaid)
+        const diagram = await window.AIService.generateDiagramFromText(selected, 'mermaid');
+        if (!diagram) throw new Error('No diagram generated.');
+        // Insert as Mermaid code block at selection
+        const before = textarea.value.substring(0, selStart);
+        const after = textarea.value.substring(selEnd);
+        const insert = diagram.startsWith('<svg')
+            ? `\n\n${diagram}\n\n`
+            : `\n\n\`\`\`mermaid\n${diagram}\n\`\`\`\n\n`;
+        textarea.value = before + insert + after;
+        // Move cursor after inserted block
+        textarea.selectionStart = textarea.selectionEnd = before.length + insert.length;
+        textarea.dispatchEvent(new Event('input'));
+    } catch (e) {
+        alert('Diagram generation failed: ' + e.message);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = 'AI Diagram';
+    }
+}
+
+// Attach handler to static button if present
+function wireAIDiagramButton() {
+    const btn = document.getElementById('ai-diagram-btn');
+    if (btn && !btn._aiWired) {
+        btn.addEventListener('click', handleAIDiagramButtonClick);
+        btn._aiWired = true;
+    }
+}
+
+// Dummy AI diagram generator (replace with real AI call)
+async function generateDiagramFromText(text) {
+    // For demo: if text contains 'flow', return a flowchart; if 'mind', return a mindmap; else sequence
+    if (/mind ?map/i.test(text)) {
+        return `mindmap\n  Root\n    Subtopic1\n      Detail1\n    Subtopic2`;
+    } else if (/flow/i.test(text)) {
+        return `flowchart TD\n  A[Start] --> B{Decision}\n  B -- Yes --> C[End]\n  B -- No --> D[Retry]`;
+    } else {
+        return `sequenceDiagram\n  Alice->>Bob: Hello Bob, how are you?\n  Bob-->>Alice: I am good thanks!`;
+    }
+    // In production, call your AI backend here
+}
+
+// Call on page load
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wireAIDiagramButton);
+} else {
+    wireAIDiagramButton();
+}
+
+// (Removed duplicate generateDiagramFromText and addAIDiagramButton)
+// Only wire up the AI Diagram button once, and do not override other toolbar events
+// --- Chart Editor Modal (Stub) ---
+function openChartEditor(type, specText, targetId) {
+    alert('Chart editing coming soon!\n\nType: ' + type + '\nTarget: ' + targetId + '\nSpec:\n' + specText);
+    // Future: Open modal with JSON editor, CSV/JSON import, live preview, and save to note
+}
+// --- AI Folder Suggestion ---
+async function triggerAIFolderSuggest() {
+    if (!activeNoteId) return;
+    const note = notes.find(n => n.id === activeNoteId);
+    if (!note) return;
+
+    // Gather content and tags
+    const content = (note.title || '') + '\n' + (note.body || '');
+    // Get all folder names
+    const allFolders = (await FolderDAO.getAll()).map(f => f.name);
+
+    // Show loading state
+    const btn = document.getElementById('ai-folder-btn');
+    if (btn) btn.classList.add('animate-pulse');
+
+    try {
+        const suggestion = await AIService.generateFolderSuggestion(content, note.tags, allFolders);
+        if (suggestion) {
+            // Show suggestion in UI (dropdown or toast)
+            showFolderSuggestion(suggestion);
+        } else {
+            showToast('No folder suggestion found.', true);
+        }
+    } catch (e) {
+        showToast('AI Folder Suggestion failed.', true);
+    } finally {
+        if (btn) btn.classList.remove('animate-pulse');
+    }
+}
+
+function showFolderSuggestion(suggestion) {
+    // Show Accept/Ignore toast
+    const toast = document.getElementById('toast');
+    const msg = document.getElementById('toast-message');
+    if (!toast || !msg) return;
+    msg.innerHTML = `AI suggests folder: <b>${suggestion}</b> <button id='accept-ai-folder' class='ml-2 px-2 py-0.5 rounded bg-emerald-500 text-white text-xs'>Accept</button> <button id='ignore-ai-folder' class='ml-1 px-2 py-0.5 rounded bg-gray-300 text-gray-700 text-xs'>Ignore</button>`;
+    toast.classList.remove('opacity-0', 'translate-y-10');
+    toast.classList.add('opacity-100', '-translate-y-2');
+    setTimeout(() => {
+        toast.classList.remove('opacity-100', '-translate-y-2');
+        toast.classList.add('opacity-0', 'translate-y-10');
+    }, 8000);
+
+    // Accept handler
+    setTimeout(() => {
+        const acceptBtn = document.getElementById('accept-ai-folder');
+        const ignoreBtn = document.getElementById('ignore-ai-folder');
+        if (acceptBtn) {
+            acceptBtn.onclick = async () => {
+                await acceptAIFolderSuggestion(suggestion);
+                toast.classList.remove('opacity-100', '-translate-y-2');
+                toast.classList.add('opacity-0', 'translate-y-10');
+            };
+        }
+        if (ignoreBtn) {
+            ignoreBtn.onclick = () => {
+                toast.classList.remove('opacity-100', '-translate-y-2');
+                toast.classList.add('opacity-0', 'translate-y-10');
+            };
+        }
+    }, 100);
+}
+
+async function acceptAIFolderSuggestion(suggestion) {
+    // Find or create folder, assign to note
+    const allFolders = await FolderDAO.getAll();
+    let folder = allFolders.find(f => f.name === suggestion);
+    if (!folder) {
+        folder = await FolderDAO.create(suggestion);
+        await refreshFolders();
+    }
+    // Assign to current note
+    if (!activeNoteId) return;
+    const note = notes.find(n => n.id === activeNoteId);
+    if (!note) return;
+    note.folderId = folder.id;
+    await NoteDAO.save(note);
+    // Update folder select UI
+    const select = document.getElementById('note-folder-select');
+    if (select) select.value = folder.id;
+    showToast(`Folder set to: ${suggestion}`);
+}
 // --- Import/Export All Notes ---
 window.exportAllNotes = async function() {
     try {
@@ -612,17 +764,14 @@ function renderMarkdownPreview() {
     // 1. Parse Markdown (using default renderer)
     preview.innerHTML = marked.parse(content);
 
-    // 2. Post-process: Convert <pre><code class="language-mermaid"> to <div class="mermaid">
-    // Marked outputs class="language-mermaid" by default for fenced code blocks
+    // 2. Post-process: Mermaid, Chart.js, Vega-Lite
+    // Mermaid
     const mermaidCodeBlocks = preview.querySelectorAll('code.language-mermaid');
-
     mermaidCodeBlocks.forEach(block => {
         const diagramDefinition = block.textContent;
         const div = document.createElement('div');
         div.className = 'mermaid';
         div.textContent = diagramDefinition;
-
-        // Replace the parent <pre> element with the new <div>
         const pre = block.parentElement;
         if (pre && pre.tagName === 'PRE') {
             pre.replaceWith(div);
@@ -630,14 +779,9 @@ function renderMarkdownPreview() {
             block.replaceWith(div);
         }
     });
-
-    // 3. Render Mermaid
     if (window.mermaid) {
         try {
-            // run() is async
-            mermaid.run({
-                nodes: preview.querySelectorAll('.mermaid')
-            }).catch(err => {
+            mermaid.run({ nodes: preview.querySelectorAll('.mermaid') }).catch(err => {
                 console.error('Mermaid Run Warning:', err);
             });
         } catch (e) {
@@ -645,6 +789,106 @@ function renderMarkdownPreview() {
             preview.innerHTML += `<div class="p-4 text-red-500 bg-red-100 rounded">Mermaid Error: ${e.message}</div>`;
         }
     }
+
+    // Chart.js
+    const chartjsBlocks = preview.querySelectorAll('code.language-chartjs');
+    chartjsBlocks.forEach((block, idx) => {
+        let chartSpec;
+        try {
+            chartSpec = JSON.parse(block.textContent);
+        } catch (e) {
+            chartSpec = null;
+        }
+        const chartDiv = document.createElement('div');
+        chartDiv.className = 'chartjs-embed my-4';
+        chartDiv.style.maxWidth = '600px';
+        chartDiv.style.margin = '0 auto';
+        const canvas = document.createElement('canvas');
+        canvas.id = `chartjs-canvas-${idx}`;
+        chartDiv.appendChild(canvas);
+        // Add Edit button
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit Chart';
+        editBtn.className = 'ml-2 px-2 py-1 rounded bg-blue-500 text-white text-xs';
+        editBtn.onclick = () => openChartEditor('chartjs', block.textContent, canvas.id);
+        chartDiv.appendChild(editBtn);
+        // Replace code block
+        const pre = block.parentElement;
+        if (pre && pre.tagName === 'PRE') {
+            pre.replaceWith(chartDiv);
+        } else {
+            block.replaceWith(chartDiv);
+        }
+        // Render chart
+        if (window.Chart && chartSpec) {
+            try {
+                new Chart(canvas.getContext('2d'), chartSpec);
+            } catch (e) {
+                chartDiv.appendChild(document.createTextNode('Chart.js render error: ' + e.message));
+            }
+        } else {
+            chartDiv.appendChild(document.createTextNode('Invalid Chart.js spec.'));
+        }
+    });
+
+    // Vega-Lite
+    const vegaBlocks = preview.querySelectorAll('code.language-vega-lite');
+    vegaBlocks.forEach((block, idx) => {
+        let vegaSpec;
+        try {
+            vegaSpec = JSON.parse(block.textContent);
+        } catch (e) {
+            vegaSpec = null;
+        }
+        // Use a unique id for every chart (avoid collisions on re-render)
+        const uniqueId = `vega-lite-div-${Date.now()}-${Math.floor(Math.random()*100000)}-${idx}`;
+        const vegaDiv = document.createElement('div');
+        vegaDiv.className = 'vega-lite-embed my-4';
+        vegaDiv.style.maxWidth = '700px';
+        vegaDiv.style.margin = '0 auto';
+        vegaDiv.id = uniqueId;
+        // Add Edit button
+        const editBtn = document.createElement('button');
+        editBtn.textContent = 'Edit Chart';
+        editBtn.className = 'ml-2 px-2 py-1 rounded bg-blue-500 text-white text-xs';
+        editBtn.onclick = () => openChartEditor('vega-lite', block.textContent, vegaDiv.id);
+        vegaDiv.appendChild(editBtn);
+        // Replace code block
+        const pre = block.parentElement;
+        if (pre && pre.tagName === 'PRE') {
+            pre.replaceWith(vegaDiv);
+        } else {
+            block.replaceWith(vegaDiv);
+        }
+        // Render Vega-Lite
+        if (!window.vegaEmbed) {
+            vegaDiv.appendChild(document.createTextNode('Vega-Lite error: vega-embed library not loaded.'));
+            console.error('Vega-Lite error: vega-embed library not loaded.');
+        } else if (vegaSpec) {
+            // Clear the div before rendering
+            vegaDiv.innerHTML = '';
+            vegaDiv.appendChild(editBtn);
+            if (preview.classList.contains('hidden')) {
+                vegaDiv.appendChild(document.createTextNode('Vega-Lite error: Preview is hidden.'));
+                console.error('Vega-Lite error: Preview is hidden when rendering.');
+            } else {
+                console.log('Rendering Vega-Lite chart in #' + uniqueId, vegaSpec);
+                setTimeout(() => {
+                    window.vegaEmbed(`#${uniqueId}`, vegaSpec, { actions: false })
+                        .then(() => {
+                            console.log('Vega-Lite chart rendered in #' + uniqueId);
+                        })
+                        .catch(err => {
+                            vegaDiv.appendChild(document.createTextNode('Vega-Lite render error: ' + err.message));
+                            console.error('Vega-Lite render error:', err);
+                        });
+                }, 0);
+            }
+        } else {
+            vegaDiv.appendChild(document.createTextNode('Invalid Vega-Lite spec.'));
+            console.error('Invalid Vega-Lite spec:', block.textContent);
+        }
+    });
 }
 
 // --- Export & Print ---
@@ -1424,7 +1668,7 @@ function openSettings() {
                 </button>
             </div>
             <div class="p-6 space-y-6">
-                
+
                 <!-- AI Model Selection -->
                 <div>
                      <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">AI Model</h4>
@@ -1521,6 +1765,30 @@ function saveSettings() {
     }
 }
 
+// Minimal toast helper used by multiple modules
+function showToast(message, isError) {
+    try {
+        let toast = document.getElementById('toast');
+        let msg = document.getElementById('toast-message');
+        if (!toast || !msg) {
+            // Create a simple toast container if not present
+            toast = document.createElement('div');
+            toast.id = 'toast';
+            Object.assign(toast.style, { position: 'fixed', bottom: '16px', left: '50%', transform: 'translateX(-50%)', padding: '10px 14px', borderRadius: '6px', zIndex: 9999, transition: 'opacity 0.2s ease', opacity: 0 });
+            msg = document.createElement('div');
+            msg.id = 'toast-message';
+            toast.appendChild(msg);
+            document.body.appendChild(toast);
+        }
+        msg.innerHTML = message;
+        toast.style.background = isError ? '#b91c1c' : '#111827';
+        toast.style.color = '#fff';
+        toast.style.opacity = 1;
+        setTimeout(() => { toast.style.opacity = 0; }, 4000);
+    } catch (e) {
+        console.warn('showToast failed:', e);
+    }
+}
 
 // 3. Interactive Checkboxes Handler
 document.getElementById('note-preview').addEventListener('change', (e) => {
@@ -1782,7 +2050,7 @@ const ChatManager = {
         }
 
         container.innerHTML = matches.map(n => `
-            <div onclick="ChatManager.insertMention('${n.id}', '${n.title.replace(/'/g, "\\'")}', ${atIndex}, '${mode}')" 
+            <div onclick="ChatManager.insertMention('${n.id}', '${n.title.replace(/'/g, "\\'")}', ${atIndex}, '${mode}')"
                 class="px-4 py-2 text-sm hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center gap-2">
                 <span class="material-symbols-outlined text-gray-400 text-xs">description</span>
                 <span class="font-medium text-gray-700 dark:text-gray-200 truncate">${n.title}</span>
