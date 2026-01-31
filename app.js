@@ -151,7 +151,7 @@ async function acceptAIFolderSuggestion(suggestion) {
     showToast(`Folder set to: ${suggestion}`);
 }
 // --- Import/Export All Notes ---
-window.exportAllNotes = async function() {
+window.exportAllNotes = async function () {
     try {
         const allNotes = await NoteDAO.getAll();
         const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(allNotes, null, 2));
@@ -167,7 +167,7 @@ window.exportAllNotes = async function() {
     }
 }
 
-window.importAllNotes = async function() {
+window.importAllNotes = async function () {
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = '.json,application/json';
@@ -841,7 +841,7 @@ function renderMarkdownPreview() {
             vegaSpec = null;
         }
         // Use a unique id for every chart (avoid collisions on re-render)
-        const uniqueId = `vega-lite-div-${Date.now()}-${Math.floor(Math.random()*100000)}-${idx}`;
+        const uniqueId = `vega-lite-div-${Date.now()}-${Math.floor(Math.random() * 100000)}-${idx}`;
         const vegaDiv = document.createElement('div');
         vegaDiv.className = 'vega-lite-embed my-4';
         vegaDiv.style.maxWidth = '700px';
@@ -2098,37 +2098,38 @@ const ChatManager = {
         input.value = '';
         input.style.height = 'auto';
 
-        // Save to DB
+        // Save USER message to DB
         await ChatMessageDAO.save({
             conversationId: this.activeConversationId,
             role: 'user',
             content: message
         });
 
+        // Update history
+        this.history.push({ role: 'user', content: message });
+
         // Update conversation title on first user message
-        if (this.history.length === 0) {
+        if (this.history.length === 1) { // 1 because we just pushed
             const title = message.substring(0, 50) + (message.length > 50 ? '...' : '');
             await ConversationDAO.updateTitle(this.activeConversationId, title);
             document.getElementById('chat-screen-title').textContent = title;
             this.renderConversationList();
         }
 
-        // UI: Add Thinking
+        // UI: Add Thinking Placeholder
         const thinkingId = this.addMessageToUI(messagesId, 'ai', 'Thinking...', true);
 
         try {
-            // 1. Resolve Context
+            // 1. Resolve Retrieval Context (RAG / View)
             let context = "";
             let usedNotes = [];
 
-            // A. Check for active note (highest priority if viewing a note)
-            console.log('ChatManager: activeNoteId =', activeNoteId);
+            // A. Check for active note
             if (activeNoteId) {
                 const activeNote = notes.find(n => n.id === activeNoteId);
-                console.log('ChatManager: Found active note?', !!activeNote, activeNote?.title);
                 if (activeNote) {
                     usedNotes.push(activeNote);
-                    context += `CURRENTLY VIEWING NOTE:\n[Note: ${activeNote.title}]\n${activeNote.body}\n\n---\n\n`;
+                    context += `CURRENTLY VIEWING NOTE:\n[Note: ${activeNote.title} (ID: ${activeNote.id})]\n${activeNote.body}\n\n---\n\n`;
                 }
             }
 
@@ -2144,57 +2145,98 @@ const ChatManager = {
             if (mentionMatches.length > 0) {
                 usedNotes = [...usedNotes, ...mentionMatches];
                 context += "User explicitly mentioned these notes:\n\n";
-                context += mentionMatches.map(n => `[Note: ${n.title}]\n${n.body}`).join('\n\n---\n\n');
+                context += mentionMatches.map(n => `[Note: ${n.title} (ID: ${n.id})]\n${n.body}`).join('\n\n---\n\n');
             }
-            // C. RAG search (only if no active note and no mentions)
+            // C. RAG search (only if limited context)
             else if (!activeNoteId && window.VectorStore) {
                 const results = await VectorStore.search(message, 3);
                 const fetchedNotes = await Promise.all(results.map(r => NoteDAO.get(r.noteId)));
                 const ragNotes = fetchedNotes.filter(n => n);
                 if (ragNotes.length > 0) {
                     usedNotes = ragNotes;
-                    context = ragNotes.map(n => `[Note: ${n.title}]\n${n.body}`).join('\n\n---\n\n');
+                    context = ragNotes.map(n => `[Note: ${n.title} (ID: ${n.id})]\n${n.body}`).join('\n\n---\n\n');
                 }
             }
 
-            const systemPrompt = `You are a helpful AI assistant integrated into a note-taking app called SmartNotes.
+            // 2. Build System Prompt
+            let systemPrompt = `You are a helpful AI assistant integrated into a note-taking app called SmartNotes.
 
-${activeNoteId && context ? `The user is CURRENTLY VIEWING a note. Here is the note content they are looking at:
-
-${context}
-
-When the user asks questions like "what is this about", "summarize this", "explain this", etc., they are referring to the note content above.` : context ? `Here are relevant notes from the user's knowledge base:
-
+${activeNoteId && context ? `The user is CURRENTLY VIEWING a note. Context:
+${context}` : context ? `Relevant notes:
 ${context}` : 'No notes are currently open and no relevant notes were found.'}
 
 INSTRUCTIONS:
-- ALWAYS answer based on the note content provided above.
-- If the user asks "what is this about" or similar, summarize the note they are viewing.
-- Cite note titles when referencing information (e.g., "According to [Note Title]...").
-- Use Markdown formatting in your responses.
-- If no context is provided, let the user know they should open a note or use @ to mention one.`;
+- Answer based on the note content provided if applicable.
+- You can use Markdown.
+`;
 
-            const messages = [
+            // Add Tools System Prompt
+            if (window.AITools) {
+                systemPrompt += window.AITools.getSystemPromptAddon();
+            }
+
+            // 3. Agent Loop
+            let messages = [
                 { role: 'system', content: systemPrompt },
-                ...this.history.slice(-10), // Last 10 messages for better context
-                { role: 'user', content: message }
+                ...this.history.slice(-10) // History includes last user message
             ];
 
-            const responseText = await AIService.chat(messages);
+            let turn = 0;
+            const MAX_TURNS = 5;
+            let finalResponse = "";
 
-            // Update history
-            this.history.push({ role: 'user', content: message });
-            this.history.push({ role: 'assistant', content: responseText });
+            while (turn < MAX_TURNS) {
+                const responseText = await AIService.chat(messages);
+
+                // Attempt to parse tool call
+                let toolCall = null;
+                try {
+                    // Regex to find the JSON object. We look for first { and last }
+                    // This is naive but works for simple models if they follow instructions
+                    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+                    if (jsonMatch) {
+                        const jsonStr = jsonMatch[0];
+                        const parsed = JSON.parse(jsonStr);
+                        if (parsed.tool && parsed.arguments) {
+                            toolCall = parsed;
+                        }
+                    }
+                } catch (e) {
+                    // JSON parse error, ignore and treat as text
+                }
+
+                if (toolCall) {
+                    // Execute Tool
+                    this.updateMessageInUI(messagesId, thinkingId, `Executing ${toolCall.tool}...`);
+
+                    let toolResult = await window.AITools.execute(toolCall.tool, toolCall.arguments);
+
+                    // Add interactions to temporary messages context
+                    messages.push({ role: 'assistant', content: JSON.stringify(toolCall) });
+                    messages.push({ role: 'user', content: `Tool Result: ${toolResult}` });
+
+                    turn++;
+                } else {
+                    // Final response
+                    finalResponse = responseText;
+                    break;
+                }
+            }
+
+            if (!finalResponse) finalResponse = "I'm sorry, I got stuck in a loop trying to perform actions.";
 
             // Save AI response to DB
             await ChatMessageDAO.save({
                 conversationId: this.activeConversationId,
                 role: 'assistant',
-                content: responseText
+                content: finalResponse
             });
 
+            // Update history
+            this.history.push({ role: 'assistant', content: finalResponse });
+
             // UI: Update AI Message
-            this.updateMessageInUI(messagesId, thinkingId, responseText);
+            this.updateMessageInUI(messagesId, thinkingId, finalResponse);
             this.mentionedNotes.clear();
 
         } catch (e) {
