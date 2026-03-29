@@ -25,3 +25,4 @@ temp.html
 
 *.md 
 notes-export.json
+__pycache__/server.cpython-313.pyc
