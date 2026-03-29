@@ -194,6 +194,12 @@ class AppRequestHandler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         self._set_cors_headers()
         # Baseline hardening for intranet deployment.
+        host_header = (self.headers.get("Host") or "").strip()
+        request_host = host_header.split(":", 1)[0].strip().lower()
+        dynamic_connect_src = ""
+        if request_host and request_host not in ("localhost", "127.0.0.1"):
+            dynamic_connect_src = f" http://{request_host}:3000 ws://{request_host}:3000"
+
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
@@ -204,7 +210,11 @@ class AppRequestHandler(http.server.SimpleHTTPRequestHandler):
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
             "font-src 'self' data: https://fonts.gstatic.com https://cdn.jsdelivr.net; "
             "script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net https://unpkg.com https://cdn.socket.io; "
-            "connect-src 'self' http://localhost:3000 ws://localhost:3000 http://127.0.0.1:3000 ws://127.0.0.1:3000 https://cdn.jsdelivr.net https://unpkg.com https://cdn.socket.io " + OLLAMA_BASE + " ws: wss:;",
+            "connect-src 'self' http://localhost:3000 ws://localhost:3000 http://127.0.0.1:3000 ws://127.0.0.1:3000"
+            + dynamic_connect_src
+            + " https://cdn.jsdelivr.net https://unpkg.com https://cdn.socket.io "
+            + OLLAMA_BASE
+            + " ws: wss:;",
         )
         super().end_headers()
 
@@ -362,6 +372,7 @@ class AppRequestHandler(http.server.SimpleHTTPRequestHandler):
 
         if path == "/api/file-notes/sync":
             notes = body.get("notes")
+            api_path = path
 
             _ensure_notes_dir()
 
@@ -372,13 +383,13 @@ class AppRequestHandler(http.server.SimpleHTTPRequestHandler):
                 if not note.get("id"):
                     continue
                 filename = _note_filename(note)
-                path = os.path.join(NOTES_DIR, filename)
+                note_path = os.path.join(NOTES_DIR, filename)
                 payload = _serialize_note_markdown(note)
-                with open(path, "w", encoding="utf-8") as fh:
+                with open(note_path, "w", encoding="utf-8") as fh:
                     fh.write(payload)
                 written.append(filename)
 
-            self._send_api_json(path, {"ok": True, "written": len(written), "files": written})
+            self._send_api_json(api_path, {"ok": True, "written": len(written), "files": written})
             return
 
         self._send_api_json(path, {"error": "Not found", "path": path}, status=404)
