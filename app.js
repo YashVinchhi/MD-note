@@ -103,7 +103,7 @@ function showFolderSuggestion(suggestion) {
     const toast = document.getElementById('toast');
     const msg = document.getElementById('toast-message');
     if (!toast || !msg) return;
-    msg.innerHTML = `AI suggests folder: <b>${suggestion}</b> <button id='accept-ai-folder' class='ml-2 px-2 py-0.5 rounded bg-emerald-500 text-white text-xs'>Accept</button> <button id='ignore-ai-folder' class='ml-1 px-2 py-0.5 rounded bg-gray-300 text-gray-700 text-xs'>Ignore</button>`;
+        msg.innerHTML = `AI suggests folder: <b>${escapeHtml(suggestion)}</b> <button id='accept-ai-folder' class='ml-2 px-2 py-0.5 rounded bg-emerald-500 text-white text-xs'>Accept</button> <button id='ignore-ai-folder' class='ml-1 px-2 py-0.5 rounded bg-gray-300 text-gray-700 text-xs'>Ignore</button>`;
     toast.classList.remove('opacity-0', 'translate-y-10');
     toast.classList.add('opacity-100', '-translate-y-2');
     setTimeout(() => {
@@ -201,6 +201,7 @@ window.importAllNotes = async function () {
 let notes = []; // Local cache of notes for rendering
 let activeNoteId = null;
 let isPreviewMode = false;
+const notesReliability = window.FileSyncService || null;
 
 // --- Core Functions ---
 // Load all notes from DB and render
@@ -251,6 +252,7 @@ async function saveCurrentNote() {
     try {
         await NoteDAO.save(note);
         updateSyncStatus();
+        if (notesReliability) notesReliability.queueFilesystemSync();
         // We don't do full refresh here to avoid UI jitter, just update list item if needed
         renderNoteList();
 
@@ -366,57 +368,26 @@ async function togglePin() {
 
 function renderNoteList(filter = 'all', searchQuery = '') {
     const container = document.getElementById('notes-container');
-    const searchVal = searchQuery || document.getElementById('search-input').value.toLowerCase();
+    const searchVal = (searchQuery || document.getElementById('search-input').value || '').toLowerCase();
+    const currentFolder = typeof activeFolderId !== 'undefined' ? activeFolderId : null;
 
-    // Filter logic (if not already filtered by DB search)
-    let filteredNotes = notes.filter(n => {
-        const matchesSearch = !searchQuery || // If we searched DB, assumes notes are already filtered. 
-            // If search input matches what triggered DB search.
-            (n.title && n.title.toLowerCase().includes(searchVal)) ||
-            (n.body && n.body.toLowerCase().includes(searchVal));
-        return matchesSearch;
+    if (!window.NoteListService) {
+        document.getElementById('total-count').innerText = notes.length;
+        return;
+    }
+
+    const filteredNotes = window.NoteListService.filterNotes(notes, {
+        filter,
+        searchQuery: searchVal,
+        activeFolderId: currentFolder,
+        includeTagsInSearch: true
     });
 
-    if (filter === 'pinned') {
-        filteredNotes = filteredNotes.filter(n => n.pinned);
-    }
-
-    document.getElementById('total-count').innerText = notes.length;
-
-    container.innerHTML = filteredNotes.map(note => `
-        <div onclick="setActiveNote('${note.id}')" class="group relative p-4 mb-2 rounded-xl border transition-all cursor-pointer ${note.id === activeNoteId ? 'bg-white dark:bg-gray-800 shadow-sm border-blue-500 border-l-4' : 'hover:bg-white dark:hover:bg-gray-800 border-transparent hover:border-gray-200 dark:hover:border-gray-700'}">
-            <div class="flex justify-between items-start mb-1">
-                <h3 class="font-semibold text-gray-900 dark:text-gray-100 line-clamp-1 ${note.id === activeNoteId ? 'text-blue-600 dark:text-blue-400' : ''}">${note.title || 'Untitled'}</h3>
-                ${note.pinned ? '<span class="material-symbols-outlined text-[14px] text-blue-500">push_pin</span>' : ''}
-            </div>
-            <p class="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-3 h-10 overflow-hidden text-ellipsis">${(note.body || '').substring(0, 100).replace(/[#*`]/g, '') || 'No content...'}</p>
-            <div class="flex items-center gap-2 overflow-hidden">
-                ${(note.tags || []).map(tag => `<span class="px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-medium border border-gray-200 dark:border-gray-600 whitespace-nowrap">#${tag}</span>`).join('')}
-            </div>
-        </div>
-    `).join('');
-}
-
-// Graph View Toggle
-function toggleGraphView() {
-    const listContainer = document.getElementById('notes-list-wrapper');
-    const graphContainer = document.getElementById('graph-container');
-    const graphBtn = document.getElementById('graph-view-btn');
-
-    const isGraphHidden = graphContainer.classList.contains('hidden');
-
-    if (isGraphHidden) {
-        // Show Graph
-        listContainer.classList.add('hidden');
-        graphContainer.classList.remove('hidden');
-        graphBtn.classList.add('bg-blue-50', 'dark:bg-blue-900/20', 'text-blue-600', 'dark:text-blue-400');
-        if (window.renderGraph) renderGraph('graph-container');
-    } else {
-        // Show List
-        listContainer.classList.remove('hidden');
-        graphContainer.classList.add('hidden');
-        graphBtn.classList.remove('bg-blue-50', 'dark:bg-blue-900/20', 'text-blue-600', 'dark:text-blue-400');
-    }
+    document.getElementById('total-count').innerText = filteredNotes.length;
+    container.innerHTML = window.NoteListService.renderNoteListHtml(filteredNotes, {
+        activeNoteId,
+        nestedTagRendering: true
+    });
 }
 
 // Graph View Toggle
@@ -757,140 +728,6 @@ if (window.mermaid) {
     mermaid.initialize({ startOnLoad: false, theme: 'default' });
 }
 
-function renderMarkdownPreview() {
-    const content = document.getElementById('note-body').value;
-    const preview = document.getElementById('note-preview');
-
-    // 1. Parse Markdown (using default renderer)
-    preview.innerHTML = marked.parse(content);
-
-    // 2. Post-process: Mermaid, Chart.js, Vega-Lite
-    // Mermaid
-    const mermaidCodeBlocks = preview.querySelectorAll('code.language-mermaid');
-    mermaidCodeBlocks.forEach(block => {
-        const diagramDefinition = block.textContent;
-        const div = document.createElement('div');
-        div.className = 'mermaid';
-        div.textContent = diagramDefinition;
-        const pre = block.parentElement;
-        if (pre && pre.tagName === 'PRE') {
-            pre.replaceWith(div);
-        } else {
-            block.replaceWith(div);
-        }
-    });
-    if (window.mermaid) {
-        try {
-            mermaid.run({ nodes: preview.querySelectorAll('.mermaid') }).catch(err => {
-                console.error('Mermaid Run Warning:', err);
-            });
-        } catch (e) {
-            console.error('Mermaid Initialization Error:', e);
-            preview.innerHTML += `<div class="p-4 text-red-500 bg-red-100 rounded">Mermaid Error: ${e.message}</div>`;
-        }
-    }
-
-    // Chart.js
-    const chartjsBlocks = preview.querySelectorAll('code.language-chartjs');
-    chartjsBlocks.forEach((block, idx) => {
-        let chartSpec;
-        try {
-            chartSpec = JSON.parse(block.textContent);
-        } catch (e) {
-            chartSpec = null;
-        }
-        const chartDiv = document.createElement('div');
-        chartDiv.className = 'chartjs-embed my-4';
-        chartDiv.style.maxWidth = '600px';
-        chartDiv.style.margin = '0 auto';
-        const canvas = document.createElement('canvas');
-        canvas.id = `chartjs-canvas-${idx}`;
-        chartDiv.appendChild(canvas);
-        // Add Edit button
-        const editBtn = document.createElement('button');
-        editBtn.textContent = 'Edit Chart';
-        editBtn.className = 'ml-2 px-2 py-1 rounded bg-blue-500 text-white text-xs';
-        editBtn.onclick = () => openChartEditor('chartjs', block.textContent, canvas.id);
-        chartDiv.appendChild(editBtn);
-        // Replace code block
-        const pre = block.parentElement;
-        if (pre && pre.tagName === 'PRE') {
-            pre.replaceWith(chartDiv);
-        } else {
-            block.replaceWith(chartDiv);
-        }
-        // Render chart
-        if (window.Chart && chartSpec) {
-            try {
-                new Chart(canvas.getContext('2d'), chartSpec);
-            } catch (e) {
-                chartDiv.appendChild(document.createTextNode('Chart.js render error: ' + e.message));
-            }
-        } else {
-            chartDiv.appendChild(document.createTextNode('Invalid Chart.js spec.'));
-        }
-    });
-
-    // Vega-Lite
-    const vegaBlocks = preview.querySelectorAll('code.language-vega-lite');
-    vegaBlocks.forEach((block, idx) => {
-        let vegaSpec;
-        try {
-            vegaSpec = JSON.parse(block.textContent);
-        } catch (e) {
-            vegaSpec = null;
-        }
-        // Use a unique id for every chart (avoid collisions on re-render)
-        const uniqueId = `vega-lite-div-${Date.now()}-${Math.floor(Math.random() * 100000)}-${idx}`;
-        const vegaDiv = document.createElement('div');
-        vegaDiv.className = 'vega-lite-embed my-4';
-        vegaDiv.style.maxWidth = '700px';
-        vegaDiv.style.margin = '0 auto';
-        vegaDiv.id = uniqueId;
-        // Add Edit button
-        const editBtn = document.createElement('button');
-        editBtn.textContent = 'Edit Chart';
-        editBtn.className = 'ml-2 px-2 py-1 rounded bg-blue-500 text-white text-xs';
-        editBtn.onclick = () => openChartEditor('vega-lite', block.textContent, vegaDiv.id);
-        vegaDiv.appendChild(editBtn);
-        // Replace code block
-        const pre = block.parentElement;
-        if (pre && pre.tagName === 'PRE') {
-            pre.replaceWith(vegaDiv);
-        } else {
-            block.replaceWith(vegaDiv);
-        }
-        // Render Vega-Lite
-        if (!window.vegaEmbed) {
-            vegaDiv.appendChild(document.createTextNode('Vega-Lite error: vega-embed library not loaded.'));
-            console.error('Vega-Lite error: vega-embed library not loaded.');
-        } else if (vegaSpec) {
-            // Clear the div before rendering
-            vegaDiv.innerHTML = '';
-            vegaDiv.appendChild(editBtn);
-            if (preview.classList.contains('hidden')) {
-                vegaDiv.appendChild(document.createTextNode('Vega-Lite error: Preview is hidden.'));
-                console.error('Vega-Lite error: Preview is hidden when rendering.');
-            } else {
-                console.log('Rendering Vega-Lite chart in #' + uniqueId, vegaSpec);
-                setTimeout(() => {
-                    window.vegaEmbed(`#${uniqueId}`, vegaSpec, { actions: false })
-                        .then(() => {
-                            console.log('Vega-Lite chart rendered in #' + uniqueId);
-                        })
-                        .catch(err => {
-                            vegaDiv.appendChild(document.createTextNode('Vega-Lite render error: ' + err.message));
-                            console.error('Vega-Lite render error:', err);
-                        });
-                }, 0);
-            }
-        } else {
-            vegaDiv.appendChild(document.createTextNode('Invalid Vega-Lite spec.'));
-            console.error('Invalid Vega-Lite spec:', block.textContent);
-        }
-    });
-}
-
 // --- Export & Print ---
 
 function exportNote() {
@@ -899,7 +736,7 @@ function exportNote() {
     if (!note) return;
 
     // Convert Markdown to HTML
-    const htmlContent = marked.parse(note.body);
+    const htmlContent = safeMarkedParse(note.body);
 
     // Create a standalone HTML document
     const fullHtml = `<!DOCTYPE html>
@@ -944,7 +781,7 @@ function exportNote() {
     </style>
 </head>
 <body>
-    <h1>${note.title || 'Untitled'}</h1>
+    <h1>${escapeHtml(note.title || 'Untitled')}</h1>
     ${htmlContent}
     <script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
     <script>
@@ -1338,69 +1175,20 @@ window.moveCurrentNote = async (folderId) => {
 };
 
 
-// Overriding renderNoteList to include folder filter
-const originalRenderNoteList = renderNoteList;
-
-renderNoteList = (filter = 'all', searchQuery = '') => {
-    // If searching, ignore folder filter usually? Or combine?
-    // Let's combine: explicit folder select narrows scope.
-
-    const container = document.getElementById('notes-container');
-    const searchVal = searchQuery || document.getElementById('search-input').value.toLowerCase();
-
-    let filteredNotes = notes.filter(n => {
-        // 1. Folder matches?
-        if (activeFolderId && n.folderId !== activeFolderId) return false;
-
-        // 2. Search matches?
-        const matchesSearch = !searchVal ||
-            (n.title && n.title.toLowerCase().includes(searchVal)) ||
-            (n.body && n.body.toLowerCase().includes(searchVal)) ||
-            (n.tags && n.tags.some(t => t.toLowerCase().includes(searchVal))); // Added tag search support explicitly
-
-        return matchesSearch;
-    });
-
-    if (filter === 'pinned') {
-        filteredNotes = filteredNotes.filter(n => n.pinned);
-    }
-
-    document.getElementById('total-count').innerText = filteredNotes.length;
-
-    container.innerHTML = filteredNotes.map(note => `
-        <div onclick="setActiveNote('${note.id}')" class="group relative p-4 mb-2 rounded-xl border transition-all cursor-pointer ${note.id === activeNoteId ? 'bg-white dark:bg-gray-800 shadow-sm border-blue-500 border-l-4' : 'hover:bg-white dark:hover:bg-gray-800 border-transparent hover:border-gray-200 dark:hover:border-gray-700'}">
-            <div class="flex justify-between items-start mb-1">
-                <h3 class="font-semibold text-gray-900 dark:text-gray-100 line-clamp-1 ${note.id === activeNoteId ? 'text-blue-600 dark:text-blue-400' : ''}">${note.title || 'Untitled'}</h3>
-                ${note.pinned ? '<span class="material-symbols-outlined text-[14px] text-blue-500">push_pin</span>' : ''}
-            </div>
-            <p class="text-sm text-gray-500 dark:text-gray-400 line-clamp-2 mb-3 h-10 overflow-hidden text-ellipsis">${(note.body || '').substring(0, 100).replace(/[#*`]/g, '') || 'No content...'}</p>
-            <div class="flex items-center gap-2 overflow-hidden flex-wrap">
-                 <!-- Nested Tag Rendering -->
-                ${(note.tags || []).map(tag => {
-        // Check if nested (contains /)
-        if (tag.includes('/')) {
-            const parts = tag.split('/');
-            return `<span class="px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-medium border border-gray-200 dark:border-gray-600 whitespace-nowrap flex items-center gap-0.5">
-                            <span class="opacity-50">${parts[0]}/</span><span>${parts.slice(1).join('/')}</span>
-                        </span>`;
-        }
-        return `<span class="px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] font-medium border border-gray-200 dark:border-gray-600 whitespace-nowrap">#${tag}</span>`;
-    }).join('')}
-            </div>
-        </div>
-    `).join('');
-};
-
-
 // Initial Load
 // We listen for 'db-ready' event from db.js or just call refresh
 window.addEventListener('db-ready', () => {
-    Promise.all([
-        refreshNotes(),
-        refreshFolders(),
-        refreshSmartViews()
-    ]).then(() => {
-        if (notes.length > 0) setActiveNote(notes[0].id);
+    const hydrationPromise = notesReliability
+        ? notesReliability.hydrateFromFilesystemIfNeeded()
+        : Promise.resolve();
+    hydrationPromise.then(() => {
+        Promise.all([
+            refreshNotes(),
+            refreshFolders(),
+            refreshSmartViews()
+        ]).then(() => {
+            if (notes.length > 0) setActiveNote(notes[0].id);
+        });
     });
 
     // Load Settings
@@ -1409,6 +1197,15 @@ window.addEventListener('db-ready', () => {
             AIService.setModel(record.value);
         }
     }).catch(console.warn);
+
+    // Periodic safety mirror to filesystem markdown files.
+    setInterval(() => {
+        if (notesReliability) notesReliability.queueFilesystemSync();
+    }, 2 * 60 * 1000);
+});
+
+window.addEventListener('beforeunload', () => {
+    if (notesReliability) notesReliability.queueFilesystemSync();
 });
 
 // --- Editor Power-Ups ---
@@ -1478,107 +1275,6 @@ async function handleImageUpload(blob) {
     }
 }
 
-// 2. Async Markdown Rendering (Images + Checklists)
-async function renderMarkdownPreview() {
-    const content = document.getElementById('note-body').value;
-    const preview = document.getElementById('note-preview');
-
-    // Custom Renderer for Checklists
-    const renderer = new marked.Renderer();
-
-    // Checkbox Renderer
-    renderer.listitem = (item) => {
-        // Marked v12+ passes an object {type, raw, text, task, checked, loose}
-        // Older versions might pass (text, task, checked)
-        // We handle both for safety or just target v12+ as per CDN.
-
-        let text, task, checked;
-
-        if (typeof item === 'object' && item !== null && 'text' in item) {
-            text = item.text;
-            task = item.task;
-            checked = item.checked;
-        } else {
-            // Fallback for older signatures if CDN resolves to old version (unlikely with just .min.js but safe)
-            text = arguments[0];
-            task = arguments[1];
-            checked = arguments[2];
-        }
-
-        if (task) {
-            // Add data-index attributes could be tricky since 'text' is processed html
-            // We'll use a simple regex approach on the *source* text for toggling, 
-            // but for rendering we just make them clickable
-            return `<li style="list-style: none;">
-                <label class="flex items-start gap-2 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-800/50 p-1 -ml-2 rounded">
-                    <input type="checkbox" ${checked ? 'checked' : ''} 
-                        class="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500 task-checkbox">
-                    <span>${text}</span>
-                </label>
-            </li>`;
-        }
-        return `<li>${text}</li>`;
-    };
-
-    // Parse Markdown with custom renderer
-    let html = marked.parse(content, { renderer });
-
-    // Handle Attachments (Async Replacement)
-    // We use a regex to find src="attachment:UUID" and replace with Blob URLs
-    // This is temporary URL lifecycle management (revoking is important in prod)
-    const attachmentRegex = /src="attachment:([^"]+)"/g;
-    let match;
-    const replacements = [];
-
-    while ((match = attachmentRegex.exec(html)) !== null) {
-        const fullMatch = match[0];
-        const id = match[1];
-        replacements.push({ fullMatch, id });
-    }
-
-    // Fetch blobs and create URLs
-    for (const item of replacements) {
-        const record = await AttachmentDAO.get(item.id);
-        if (record && record.blob) {
-            const url = URL.createObjectURL(record.blob);
-            html = html.replace(item.fullMatch, `src="${url}" class="max-w-full rounded-lg shadow-sm my-2"`);
-        } else {
-            html = html.replace(item.fullMatch, `src="" alt="Image not found"`);
-        }
-    }
-
-    preview.innerHTML = html;
-
-    // init mermaid if needed
-    if (window.mermaid) {
-        // ... existing mermaid logic (copy-pasted or simplified)
-        // Simplified re-run for this block
-        setTimeout(() => {
-            const mermaidBlocks = preview.querySelectorAll('code.language-mermaid');
-            mermaidBlocks.forEach(block => {
-                const div = document.createElement('div');
-                div.className = 'mermaid';
-                div.textContent = block.textContent;
-                block.parentElement.replaceWith(div);
-            });
-            mermaid.run({ nodes: preview.querySelectorAll('.mermaid') });
-        }, 0);
-    }
-
-    // Render Math (KaTeX)
-    if (window.renderMathInElement) {
-        renderMathInElement(preview, {
-            delimiters: [
-                { left: '$$', right: '$$', display: true },
-                { left: '$', right: '$', display: false },
-                { left: '\\(', right: '\\)', display: false },
-                { left: '\\[', right: '\\]', display: true }
-            ],
-            throwOnError: false
-        });
-    }
-}
-
 // --- Data Management (Import/Export) ---
 
 async function exportData() {
@@ -1641,128 +1337,6 @@ async function importData() {
         }
     };
     input.click();
-}
-
-function openSettings() {
-    // Simple alert-based menu for now, or we can make a modal.
-    // Given the request, let's make a simple modal or just trigger actions.
-    // Let's create a dynamic modal for better UX.
-
-    // Check if modal exists
-    let modal = document.getElementById('settings-modal');
-    if (modal) {
-        modal.classList.remove('hidden');
-        return;
-    }
-
-    // Create Modal
-    modal = document.createElement('div');
-    modal.id = 'settings-modal';
-    modal.className = 'fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm';
-    modal.innerHTML = `
-        <div class="bg-white dark:bg-gray-900 rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div class="p-4 border-b border-gray-200 dark:border-gray-800 flex justify-between items-center">
-                <h3 class="font-bold text-lg">Settings</h3>
-                <button onclick="document.getElementById('settings-modal').classList.add('hidden')" class="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">
-                    <span class="material-symbols-outlined">close</span>
-                </button>
-            </div>
-            <div class="p-6 space-y-6">
-
-                <!-- AI Model Selection -->
-                <div>
-                     <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">AI Model</h4>
-                     <div class="flex items-center gap-3">
-                        <div class="relative flex-1">
-                            <select id="model-select" class="w-full bg-gray-50 dark:bg-gray-800 border-none rounded-xl px-4 py-3 text-sm appearance-none cursor-pointer focus:ring-2 focus:ring-blue-500">
-                                <option value="" disabled selected>Loading models...</option>
-                            </select>
-                            <span class="absolute right-4 top-3.5 pointer-events-none text-gray-500 material-symbols-outlined text-[20px]">expand_more</span>
-                        </div>
-                        <button onclick="saveSettings()" class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-3 rounded-xl text-sm font-medium transition-colors">
-                            Save
-                        </button>
-                     </div>
-                     <p class="text-xs text-gray-400 mt-2">Selected model will be used for Chat, Tagging, and Summarization.</p>
-                </div>
-
-                <!-- Data Management -->
-                <div>
-                    <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">Data Management</h4>
-                    <div class="space-y-2">
-                        <button onclick="exportData()" class="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors text-left">
-                            <span class="material-symbols-outlined text-blue-500">download</span>
-                            <div>
-                                <div class="font-medium">Export Backup</div>
-                                <div class="text-xs text-gray-500">Save all notes and attachments to JSON</div>
-                            </div>
-                        </button>
-                        <button onclick="importData()" class="w-full flex items-center gap-3 px-4 py-3 bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-xl transition-colors text-left">
-                            <span class="material-symbols-outlined text-green-500">upload</span>
-                            <div>
-                                <div class="font-medium">Import Backup</div>
-                                <div class="text-xs text-gray-500">Restore from a JSON file</div>
-                            </div>
-                        </button>
-                    </div>
-                </div>
-
-                <!-- About -->
-                 <div>
-                    <h4 class="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-2">About</h4>
-                    <p class="text-sm text-gray-600 dark:text-gray-400">
-                        SmartNotes Local v1.1<br>
-                        Data is stored locally in your browser (IndexedDB).
-                    </p>
-                </div>
-
-            </div>
-        </div>
-    `;
-    document.body.appendChild(modal);
-
-    // Populate Models
-    const select = document.getElementById('model-select');
-    if (window.AIService) {
-        AIService.getModels().then(models => {
-            select.innerHTML = '';
-            if (models.length === 0) {
-                const option = document.createElement('option');
-                option.text = "No models found (Is Ollama running?)";
-                select.add(option);
-                return;
-            }
-            models.forEach(m => {
-                const option = document.createElement('option');
-                option.value = m;
-                option.text = m;
-                if (m === AIService.model) option.selected = true;
-                select.add(option);
-            });
-        }).catch(err => {
-            select.innerHTML = '<option>Error loading models</option>';
-        });
-    }
-}
-
-function saveSettings() {
-    const select = document.getElementById('model-select');
-    const model = select.value;
-    if (model) {
-        AIService.setModel(model);
-        // Persist to localStorage?
-        localStorage.setItem('preferred-model', model);
-
-        // Visual feedback
-        const btn = document.querySelector('button[onclick="saveSettings()"]');
-        const originalText = btn.textContent;
-        btn.textContent = "Saved!";
-        btn.classList.add('bg-green-600');
-        setTimeout(() => {
-            btn.textContent = originalText;
-            btn.classList.remove('bg-green-600');
-        }, 1500);
-    }
 }
 
 // Minimal toast helper used by multiple modules
@@ -1831,12 +1405,18 @@ function toggleCheckboxInSource(index, isChecked) {
 
 // --- Chat Interface Logic (ChatGPT-style) ---
 
+const chatState = window.ChatUIService && typeof window.ChatUIService.createChatState === 'function'
+    ? window.ChatUIService.createChatState()
+    : {
+        history: [],
+        activeConversationId: null,
+        mentionQuery: null,
+        isMentioning: false,
+        mentionedNotes: new Set()
+    };
+
 const ChatManager = {
-    history: [], // [{role, content}] - Current conversation messages (for AI context)
-    activeConversationId: null,
-    mentionQuery: null,
-    isMentioning: false,
-    mentionedNotes: new Set(),
+    ...chatState,
 
     // --- View Toggles ---
     async toggleMiniChat() {
@@ -1933,70 +1513,39 @@ const ChatManager = {
     },
 
     async renderConversationList() {
-        const container = document.getElementById('conversation-list');
         const convs = await ConversationDAO.getAll();
-
-        container.innerHTML = convs.map(c => `
-            <button onclick="ChatManager.loadConversation('${c.id}')"
-                data-conv-id="${c.id}"
-                class="w-full text-left px-3 py-2.5 rounded-lg text-sm hover:bg-gray-200 dark:hover:bg-gray-800 flex items-center gap-2 transition-colors ${c.id === this.activeConversationId ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' : 'text-gray-700 dark:text-gray-300'}">
-                <span class="material-symbols-outlined text-[18px] opacity-60">chat_bubble</span>
-                <span class="truncate flex-1">${c.title}</span>
-            </button>
-        `).join('');
+        if (window.ChatUIService) {
+            window.ChatUIService.renderConversationList('conversation-list', convs, this.activeConversationId);
+        }
     },
 
     highlightConversation(id) {
-        const container = document.getElementById('conversation-list');
-        container.querySelectorAll('button').forEach(btn => {
-            if (btn.dataset.convId === id) {
-                btn.classList.add('bg-blue-100', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
-            } else {
-                btn.classList.remove('bg-blue-100', 'dark:bg-blue-900/30', 'text-blue-700', 'dark:text-blue-300');
-            }
-        });
+        if (window.ChatUIService) {
+            window.ChatUIService.highlightConversation('conversation-list', id);
+        }
     },
 
     renderMessagesToContainer(containerId, messages) {
-        const container = document.getElementById(containerId);
-        if (messages.length === 0) {
-            container.innerHTML = this.getWelcomeMessage();
-            return;
+        if (window.ChatUIService) {
+            window.ChatUIService.renderMessagesToContainer(containerId, messages);
         }
-        container.innerHTML = messages.map(m => this.createMessageHTML(m.role === 'user' ? 'user' : 'ai', m.content)).join('');
-        container.scrollTop = container.scrollHeight;
     },
 
     getWelcomeMessage() {
-        return `
-            <div class="flex gap-3">
-                <div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 shadow shadow-indigo-500/30">
-                    <span class="material-symbols-outlined text-white text-sm">smart_toy</span>
-                </div>
-                <div class="bg-gray-100 dark:bg-gray-800 rounded-2xl rounded-tl-none px-4 py-2 text-sm text-gray-800 dark:text-gray-200 max-w-[85%]">
-                    Hello! I can answer questions based on your notes. Type @ to mention specific notes.
-                </div>
-            </div>
-        `;
+        return window.ChatUIService ? window.ChatUIService.getWelcomeMessage() : '';
     },
 
     createMessageHTML(role, text, isThinking = false) {
-        const avatar = role === 'user'
-            ? `<div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 text-white shadow shadow-indigo-500/30"><span class="material-symbols-outlined text-sm">person</span></div>`
-            : `<div class="w-8 h-8 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center flex-shrink-0 text-white shadow shadow-indigo-500/30"><span class="material-symbols-outlined text-sm">smart_toy</span></div>`;
-
-        const bubbleClass = role === 'user'
-            ? "bg-gradient-to-br from-blue-500 to-indigo-600 text-white rounded-2xl rounded-tr-none px-4 py-2.5 text-sm max-w-[85%] shadow shadow-indigo-500/30 prose prose-invert prose-p:my-1"
-            : "bg-white dark:bg-gray-800 border border-gray-100 dark:border-gray-700 rounded-2xl rounded-tl-none px-4 py-3 text-sm text-gray-800 dark:text-gray-200 max-w-[85%] shadow-sm prose dark:prose-invert prose-p:my-1";
-
-        const content = isThinking ? text : marked.parse(text);
-        return `<div class="flex gap-3 ${role === 'user' ? 'flex-row-reverse' : ''}">${avatar}<div class="${bubbleClass} ${isThinking ? 'animate-pulse' : ''}">${content}</div></div>`;
+        return window.ChatUIService
+            ? window.ChatUIService.createMessageHTML(role, text, isThinking)
+            : '';
     },
 
     // --- Input Handling ---
     adjustHeight(el) {
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, 128) + 'px';
+        if (window.ChatUIService) {
+            window.ChatUIService.adjustInputHeight(el, 128);
+        }
     },
 
     handleInput(el, mode = 'mini') {
@@ -2120,110 +1669,24 @@ const ChatManager = {
         const thinkingId = this.addMessageToUI(messagesId, 'ai', 'Thinking...', true);
 
         try {
-            // 1. Resolve Retrieval Context (RAG / View)
-            let context = "";
-            let usedNotes = [];
+            const reply = window.ChatRagService
+                ? await window.ChatRagService.generateAssistantReply({
+                    message,
+                    notes,
+                    activeNoteId,
+                    history: this.history,
+                    aiChat: (messages) => AIService.chat(messages),
+                    executeTool: async (toolCall) => {
+                        return window.AITools.execute(toolCall.tool, toolCall.arguments);
+                    },
+                    onToolExecution: (toolCall) => {
+                        this.updateMessageInUI(messagesId, thinkingId, `Executing ${toolCall.tool}...`);
+                    },
+                    maxTurns: 5
+                })
+                : { finalResponse: 'Unable to generate a response right now.' };
 
-            // A. Check for active note
-            if (activeNoteId) {
-                const activeNote = notes.find(n => n.id === activeNoteId);
-                if (activeNote) {
-                    usedNotes.push(activeNote);
-                    context += `CURRENTLY VIEWING NOTE:\n[Note: ${activeNote.title} (ID: ${activeNote.id})]\n${activeNote.body}\n\n---\n\n`;
-                }
-            }
-
-            // B. Explicit Mentions
-            const mentionMatches = [];
-            const sortedNotes = [...notes].sort((a, b) => b.title.length - a.title.length);
-            for (const n of sortedNotes) {
-                if (message.includes(`@${n.title}`) && n.id !== activeNoteId) {
-                    mentionMatches.push(n);
-                }
-            }
-
-            if (mentionMatches.length > 0) {
-                usedNotes = [...usedNotes, ...mentionMatches];
-                context += "User explicitly mentioned these notes:\n\n";
-                context += mentionMatches.map(n => `[Note: ${n.title} (ID: ${n.id})]\n${n.body}`).join('\n\n---\n\n');
-            }
-            // C. RAG search (only if limited context)
-            else if (!activeNoteId && window.VectorStore) {
-                const results = await VectorStore.search(message, 3);
-                const fetchedNotes = await Promise.all(results.map(r => NoteDAO.get(r.noteId)));
-                const ragNotes = fetchedNotes.filter(n => n);
-                if (ragNotes.length > 0) {
-                    usedNotes = ragNotes;
-                    context = ragNotes.map(n => `[Note: ${n.title} (ID: ${n.id})]\n${n.body}`).join('\n\n---\n\n');
-                }
-            }
-
-            // 2. Build System Prompt
-            let systemPrompt = `You are a helpful AI assistant integrated into a note-taking app called SmartNotes.
-
-${activeNoteId && context ? `The user is CURRENTLY VIEWING a note. Context:
-${context}` : context ? `Relevant notes:
-${context}` : 'No notes are currently open and no relevant notes were found.'}
-
-INSTRUCTIONS:
-- Answer based on the note content provided if applicable.
-- You can use Markdown.
-`;
-
-            // Add Tools System Prompt
-            if (window.AITools) {
-                systemPrompt += window.AITools.getSystemPromptAddon();
-            }
-
-            // 3. Agent Loop
-            let messages = [
-                { role: 'system', content: systemPrompt },
-                ...this.history.slice(-10) // History includes last user message
-            ];
-
-            let turn = 0;
-            const MAX_TURNS = 5;
-            let finalResponse = "";
-
-            while (turn < MAX_TURNS) {
-                const responseText = await AIService.chat(messages);
-
-                // Attempt to parse tool call
-                let toolCall = null;
-                try {
-                    // Regex to find the JSON object. We look for first { and last }
-                    // This is naive but works for simple models if they follow instructions
-                    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-                    if (jsonMatch) {
-                        const jsonStr = jsonMatch[0];
-                        const parsed = JSON.parse(jsonStr);
-                        if (parsed.tool && parsed.arguments) {
-                            toolCall = parsed;
-                        }
-                    }
-                } catch (e) {
-                    // JSON parse error, ignore and treat as text
-                }
-
-                if (toolCall) {
-                    // Execute Tool
-                    this.updateMessageInUI(messagesId, thinkingId, `Executing ${toolCall.tool}...`);
-
-                    let toolResult = await window.AITools.execute(toolCall.tool, toolCall.arguments);
-
-                    // Add interactions to temporary messages context
-                    messages.push({ role: 'assistant', content: JSON.stringify(toolCall) });
-                    messages.push({ role: 'user', content: `Tool Result: ${toolResult}` });
-
-                    turn++;
-                } else {
-                    // Final response
-                    finalResponse = responseText;
-                    break;
-                }
-            }
-
-            if (!finalResponse) finalResponse = "I'm sorry, I got stuck in a loop trying to perform actions.";
+            const finalResponse = reply.finalResponse;
 
             // Save AI response to DB
             await ChatMessageDAO.save({
@@ -2246,30 +1709,20 @@ INSTRUCTIONS:
     },
 
     addMessageToUI(containerId, role, text, isThinking = false) {
-        const container = document.getElementById(containerId);
-        const div = document.createElement('div');
-        const id = 'msg-' + Date.now().toString();
-        div.id = id;
-        div.innerHTML = this.createMessageHTML(role, text, isThinking);
-        div.innerHTML = div.firstElementChild.outerHTML; // Flatten
-        div.firstElementChild.id = id;
-        container.appendChild(div.firstElementChild);
-        container.scrollTop = container.scrollHeight;
-        return id;
+        if (!window.ChatUIService) return null;
+        return window.ChatUIService.addMessageToUI(containerId, role, text, isThinking);
     },
 
     updateMessageInUI(containerId, id, text) {
-        const div = document.getElementById(id);
-        if (!div) return;
-        const bubble = div.querySelector('div:last-child');
-        bubble.classList.remove('animate-pulse');
-        bubble.innerHTML = marked.parse(text);
-        document.getElementById(containerId).scrollTop = document.getElementById(containerId).scrollHeight;
+        if (window.ChatUIService) {
+            window.ChatUIService.updateMessageInUI(containerId, id, text);
+        }
     },
 
     scrollToBottom(containerId) {
-        const container = document.getElementById(containerId);
-        container.scrollTop = container.scrollHeight;
+        if (window.ChatUIService) {
+            window.ChatUIService.scrollToBottom(containerId);
+        }
     }
 };
 

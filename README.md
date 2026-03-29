@@ -54,7 +54,12 @@ Start the development server:
 python server.py
 ```
 
-Click the link shown in the terminal (usually `http://localhost:8000`).
+Click the link shown in the terminal (usually `http://localhost:8088`).
+
+### Run Checks
+```bash
+npm test
+```
 
 ## 🖥️ Server Commands (TUI)
 The `server.py` script includes a built-in Terminal UI for easy management:

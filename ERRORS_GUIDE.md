@@ -16,7 +16,7 @@ cdn.tailwindcss.com should not be used in production
 
 ### 2. 🔴 CORS Error (Critical - Blocks AI Features)
 ```
-Access to fetch at 'http://localhost:11434/api/generate' from origin 'null' 
+Access to fetch at 'http://192.168.1.64:11434/api/generate' from origin 'null' 
 has been blocked by CORS policy
 ```
 **Impact:** AI features won't work  
@@ -253,7 +253,7 @@ python -m http.server 8001  # Use different port
 
 ### AI still doesn't work
 1. Make sure Ollama is running: `ollama run llama3`
-2. Test Ollama: `curl http://localhost:11434/api/tags`
+2. Test Ollama: `curl http://192.168.1.64:11434/api/tags`
 3. Check browser console for specific errors
 
 ### Page doesn't update

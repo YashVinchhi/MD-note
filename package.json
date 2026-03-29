@@ -1,19 +1,31 @@
 {
   "dependencies": {
     "@tailwindcss/cli": "^4.1.18",
+    "@tailwindcss/container-queries": "^0.1.1",
+    "@tailwindcss/forms": "^0.5.11",
     "@tailwindcss/postcss": "^4.1.18",
-    "postcss": "^8.5.6",
-    "tailwindcss": "^4.1.18",
+    "@tailwindcss/typography": "^0.5.19",
+    "chalk": "^4.1.2",
     "enquirer": "^2.3.6",
     "figlet": "^1.5.2",
     "gradient-string": "^2.0.1",
     "marked": "^4.3.0",
-    "chalk": "^4.1.2"
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.18"
   },
   "devDependencies": {
     "@types/dexie": "^1.3.32"
   },
   "scripts": {
-    "cli": "node cli.js"
+    "cli": "node cli.js",
+    "css:build": "npx @tailwindcss/cli -i ./tailwind.input.css -o ./tailwind.output.css --minify",
+    "css:watch": "npx @tailwindcss/cli -i ./tailwind.input.css -o ./tailwind.output.css --watch",
+    "lint:js": "node scripts/lint-js.js",
+    "test:js": "node tests/js_modules.test.js",
+    "test:py": "python -m unittest discover -s tests -p \"test_*.py\"",
+    "test": "npm run lint:js && npm run test:js && npm run test:py",
+    "baseline:test": "node scripts/baseline-tests.js",
+    "baseline:perf": "node scripts/perf-baseline.js",
+    "baseline:all": "npm run baseline:test && npm run baseline:perf"
   }
 }

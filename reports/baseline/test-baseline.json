@@ -1,0 +1,43 @@
+{
+  "generatedAt": "2026-03-29T14:56:12.079Z",
+  "nodeVersion": "v20.18.1",
+  "platform": "win32",
+  "steps": [
+    {
+      "name": "lint:js",
+      "command": "npm run lint:js",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 1093,
+      "stdout": "\n> lint:js\n> node scripts/lint-js.js\n\nChecked 21 JS files.\n",
+      "stderr": "",
+      "error": null
+    },
+    {
+      "name": "test:js",
+      "command": "npm run test:js",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 309,
+      "stdout": "\n> test:js\n> node tests/js_modules.test.js\n\nJS module tests passed\n",
+      "stderr": "",
+      "error": null
+    },
+    {
+      "name": "test:py",
+      "command": "npm run test:py",
+      "status": "passed",
+      "exitCode": 0,
+      "durationMs": 1232,
+      "stdout": "\n> test:py\n> python -m unittest discover -s tests -p \"test_*.py\"\n\n",
+      "stderr": ".............\r\n----------------------------------------------------------------------\r\nRan 13 tests in 0.865s\r\n\r\nOK\r\n",
+      "error": null
+    }
+  ],
+  "summary": {
+    "total": 3,
+    "passed": 3,
+    "failed": 0,
+    "durationMs": 2634
+  }
+}

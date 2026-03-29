@@ -1,0 +1,59 @@
+{
+  "generatedAt": "2026-03-29T14:56:16.233Z",
+  "environment": {
+    "nodeVersion": "v20.18.1",
+    "platform": "win32"
+  },
+  "metrics": {
+    "searchLatency": {
+      "notes1k": {
+        "name": "search-latency-1k",
+        "iterations": 40,
+        "p50Ms": 0.092,
+        "p95Ms": 0.338,
+        "avgMs": 0.147
+      },
+      "notes5k": {
+        "name": "search-latency-5k",
+        "iterations": 40,
+        "p50Ms": 0.447,
+        "p95Ms": 0.599,
+        "avgMs": 0.465
+      }
+    },
+    "chatLatency": {
+      "firstTokenLatency": {
+        "p50Ms": 15.412,
+        "p95Ms": 15.975,
+        "avgMs": 15.395
+      },
+      "fullResponseLatency": {
+        "p50Ms": 46.419,
+        "p95Ms": 47.697,
+        "avgMs": 46.486
+      }
+    },
+    "noteListRenderTime": {
+      "notes1k": {
+        "name": "note-list-render-1k",
+        "iterations": 25,
+        "p50Ms": 0.348,
+        "p95Ms": 0.769,
+        "avgMs": 0.436
+      },
+      "notes5k": {
+        "name": "note-list-render-5k",
+        "iterations": 25,
+        "p50Ms": 0.98,
+        "p95Ms": 1.266,
+        "avgMs": 0.939
+      }
+    },
+    "indexingThroughput": {
+      "sampleSize": 2000,
+      "durationMs": 1.859,
+      "notesPerMinute": 64547361.63,
+      "method": "VectorStore._chunkText preprocessing throughput"
+    }
+  }
+}

@@ -16,24 +16,20 @@ function uuidv4() {
 
 const db = new Dexie('SynapseDB');
 
-// Define Schema
-// 'id' is our primary key (string UUID from app.js)
-// We index fields we want to query/filter by: tags, pinned, updatedAt
+// Keep version numbers above historical schema version used by this repo.
 db.version(60).stores({
-    notes: 'id, title, *tags, date, pinned, updatedAt, summary', // v1 schema
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary',
     settings: 'key'
 });
 
-// Upgrade to v2
-db.version(60).stores({
-    notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId', // Added folderId
+db.version(61).stores({
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
     smart_views: 'id, name, query, icon'
 });
 
-// Upgrade to v3
-db.version(60).stores({
+db.version(62).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
@@ -41,24 +37,35 @@ db.version(60).stores({
     attachments: 'id, noteId, type, createdAt'
 });
 
-// Upgrade to v4
-db.version(60).stores({
+db.version(63).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
     smart_views: 'id, name, query, icon',
     attachments: 'id, noteId, type, createdAt',
-    embeddings: 'noteId, updatedAt' // vector is stored as non-indexed property
+    embeddings: 'noteId, updatedAt'
 });
 
-// Upgrade to v5 - Chat History
-db.version(60).stores({
+db.version(64).stores({
     notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
     settings: 'key',
     folders: 'id, parentId, name, collapsed',
     smart_views: 'id, name, query, icon',
     attachments: 'id, noteId, type, createdAt',
     embeddings: 'noteId, updatedAt',
+    conversations: 'id, title, createdAt, updatedAt',
+    chat_messages: 'id, conversationId, role, timestamp'
+});
+
+db.version(65).stores({
+    notes: 'id, title, *tags, date, pinned, updatedAt, summary, folderId',
+    settings: 'key',
+    folders: 'id, parentId, name, collapsed',
+    smart_views: 'id, name, query, icon',
+    attachments: 'id, noteId, type, createdAt',
+    embeddings: 'noteId, updatedAt',
+    embedding_buckets: '++id, bucketKey, noteId, updatedAt',
+    rag_cache: 'queryHash, updatedAt',
     conversations: 'id, title, createdAt, updatedAt',
     chat_messages: 'id, conversationId, role, timestamp'
 });

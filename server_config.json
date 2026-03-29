@@ -1,1 +1,4 @@
-{"selected_model": "deepseek-coder:6.7b"}
+{
+  "selected_model": "deepseek-coder:6.7b",
+  "default_model": "deepseek-coder:6.7b"
+}

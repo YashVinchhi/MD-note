@@ -3,7 +3,7 @@
 
     const AIService = {
         // Default endpoint: use the web app's origin proxy (/api/* forwarded by server.py)
-        endpoint: (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:50001') + '/api/generate',
+        endpoint: (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:8088') + '/api/generate',
         model: null,
         /**
          * Generate a diagram (Mermaid or SVG) from plain text using Ollama
@@ -35,7 +35,7 @@
          */
         async checkHealth() {
             try {
-                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:50001');
+                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:8088');
                 const res = await fetch(base + '/api/tags');
                 return res.ok;
             } catch (e) {
@@ -143,6 +143,9 @@
                 const res = await fetch('/api/default-model');
                 if (res.ok) {
                     const data = await res.json();
+                    if (window.ApiContracts) {
+                        window.ApiContracts.validateResponse('/api/default-model', data);
+                    }
                     if (data.model) {
                         this.model = data.model;
                         console.log(`AIService: Initialized with server model: ${this.model}`);
@@ -154,7 +157,7 @@
 
             // Ensure endpoint/baseUrl are set
             if (!this.endpoint) {
-                this.endpoint = (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:50001') + '/api/generate';
+                this.endpoint = (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:8088') + '/api/generate';
             }
             this.baseUrl = (this.endpoint || '').replace('/api/generate', '');
         },
@@ -167,6 +170,22 @@
             if (modelName) {
                 this.model = modelName;
                 console.log(`AIService: Model set to ${modelName}`);
+                // Best-effort persistence of selected model in server config.
+                const payload = { model: modelName };
+                if (window.ApiContracts) {
+                    window.ApiContracts.validateRequest('/api/model', payload);
+                }
+                fetch('/api/model', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                }).then(async (res) => {
+                    if (!res.ok) return;
+                    const data = await res.json();
+                    if (window.ApiContracts) {
+                        window.ApiContracts.validateResponse('/api/model', data);
+                    }
+                }).catch(() => { /* non-blocking */ });
             }
         },
 
@@ -176,7 +195,7 @@
          */
         async getModels() {
             try {
-                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:50001');
+                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:8088');
                 const res = await fetch(base + '/api/tags');
                 if (!res.ok) {
                     const body = await res.text().catch(() => '');
@@ -200,14 +219,18 @@
             let embeddingModel = 'nomic-embed-text';
 
             try {
-                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:50001');
+                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:8088');
+                const payload = {
+                    model: embeddingModel,
+                    prompt: text
+                };
+                if (window.ApiContracts) {
+                    window.ApiContracts.validateRequest('/api/embeddings', payload);
+                }
                 const response = await fetch(base + '/api/embeddings', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: embeddingModel,
-                        prompt: text
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 if (!response.ok) {
@@ -223,14 +246,20 @@
                     });
                     if (!response2.ok) throw new Error('Failed to generate embedding');
                     const data2 = await response2.json();
+                    if (window.ApiContracts) {
+                        window.ApiContracts.validateResponse('/api/embeddings', data2);
+                    }
                     return data2.embedding;
                 }
 
                 const data = await response.json();
+                if (window.ApiContracts) {
+                    window.ApiContracts.validateResponse('/api/embeddings', data);
+                }
                 return data.embedding;
             } catch (e) {
-                console.error("Embedding Error:", e);
-                throw e;
+                console.warn("Embedding unavailable, semantic retrieval skipped:", e.message || e);
+                return null;
             }
         },
 
@@ -239,15 +268,19 @@
             // Assuming `this.endpoint` is the base URL for Ollama API calls.
 
             try {
-                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:50001');
+                const base = (this.endpoint || '').replace('/api/generate', '') || (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:8088');
+                const payload = {
+                    model: this.model,
+                    messages: messages,
+                    stream: false
+                };
+                if (window.ApiContracts) {
+                    window.ApiContracts.validateRequest('/api/chat', payload);
+                }
                 const response = await fetch(base + '/api/chat', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: this.model,
-                        messages: messages,
-                        stream: false // For now, no streaming to simplify UI
-                    })
+                    body: JSON.stringify(payload)
                 });
 
                 if (!response.ok) {
@@ -255,6 +288,9 @@
                     throw new Error(`Chat failed: ${response.status} ${response.statusText} - ${body}`);
                 }
                 const data = await response.json();
+                if (window.ApiContracts) {
+                    window.ApiContracts.validateResponse('/api/chat', data);
+                }
                 return data.message && data.message.content ? data.message.content : (data.response || ''); // Return just the text content
             } catch (e) {
                 console.error("Chat Error:", e);
@@ -272,17 +308,22 @@
             try {
                 // Ensure endpoint is set
                 if (!this.endpoint) {
-                    this.endpoint = (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:50001') + '/api/generate';
+                    this.endpoint = (typeof window !== 'undefined' && window.location && window.location.origin ? window.location.origin : 'http://localhost:8088') + '/api/generate';
+                }
+
+                const payload = {
+                    model: this.model,
+                    prompt: prompt,
+                    stream: false
+                };
+                if (window.ApiContracts) {
+                    window.ApiContracts.validateRequest('/api/generate', payload);
                 }
 
                 const response = await fetch(this.endpoint, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        model: this.model,
-                        prompt: prompt,
-                        stream: false
-                    }),
+                    body: JSON.stringify(payload),
                     signal: controller.signal
                 });
 
@@ -295,6 +336,9 @@
                 }
 
                 const data = await response.json();
+                if (window.ApiContracts) {
+                    window.ApiContracts.validateResponse('/api/generate', data);
+                }
                 // Support different response shapes
                 if (data.response) return (typeof data.response === 'string') ? data.response.trim() : JSON.stringify(data.response);
                 if (data.message && data.message.content) return data.message.content.trim();
