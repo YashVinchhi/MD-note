@@ -665,10 +665,23 @@ def start_control_server():
     if CONTROL_HTTPD:
         return
 
-    CONTROL_HTTPD = ThreadedHTTPServer(("127.0.0.1", CONTROL_PORT), ControlRequestHandler)
-    CONTROL_THREAD = threading.Thread(target=CONTROL_HTTPD.serve_forever, daemon=True)
-    CONTROL_THREAD.start()
-    logging.info("Control server listening on 127.0.0.1:%s", CONTROL_PORT)
+    if os.environ.get("SMARTNOTES_DISABLE_CONTROL_API", "").lower() in ("1", "true", "yes"):
+        logging.info("Control API startup disabled by SMARTNOTES_DISABLE_CONTROL_API")
+        return
+
+    try:
+        CONTROL_HTTPD = ThreadedHTTPServer(("127.0.0.1", CONTROL_PORT), ControlRequestHandler)
+        CONTROL_THREAD = threading.Thread(target=CONTROL_HTTPD.serve_forever, daemon=True)
+        CONTROL_THREAD.start()
+        logging.info("Control server listening on 127.0.0.1:%s", CONTROL_PORT)
+    except OSError as exc:
+        CONTROL_HTTPD = None
+        CONTROL_THREAD = None
+        logging.warning(
+            "Control API could not bind to 127.0.0.1:%s (%s). Continuing without control API.",
+            CONTROL_PORT,
+            exc,
+        )
 
 
 def stop_control_server():
